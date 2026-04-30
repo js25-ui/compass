@@ -101,3 +101,13 @@ CREATE TABLE IF NOT EXISTS eval_runs (
   metadata                      JSONB,
   run_at                        TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- RLS off for v1 single-user demo (per spec: "Auth: None").
+-- When v2 adds auth, enable RLS and add per-role policies instead.
+ALTER TABLE targets       DISABLE ROW LEVEL SECURITY;
+ALTER TABLE documents     DISABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks        DISABLE ROW LEVEL SECURITY;
+ALTER TABLE model_runs    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations DISABLE ROW LEVEL SECURITY;
+ALTER TABLE messages      DISABLE ROW LEVEL SECURITY;
+ALTER TABLE eval_runs     DISABLE ROW LEVEL SECURITY;
