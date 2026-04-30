@@ -4,28 +4,33 @@
 -- Enable pgvector extension for embeddings
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Targets (companies, deals, securities)
+-- Targets (companies, deals, securities — populated on demand by the resolver/ingestor)
 CREATE TABLE IF NOT EXISTS targets (
-  id            TEXT PRIMARY KEY,                  -- e.g., 'cava-ipo-2026', 'ba-30y-2056'
-  name          TEXT NOT NULL,                     -- e.g., 'Cava Group IPO'
-  ticker        TEXT,                              -- e.g., 'CAVA', 'BA'
-  cik           TEXT,                              -- SEC CIK if applicable
-  business_line TEXT NOT NULL,                     -- 'ecm' | 'dcm' | 'alts'
-  asset_class   TEXT,                              -- 'ipos', 'ig-corporate', 'private-equity', etc.
-  metadata      JSONB,                             -- flexible additional fields
-  created_at    TIMESTAMPTZ DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ DEFAULT NOW()
+  id              TEXT PRIMARY KEY,                  -- e.g., 'cava-ipo-2026', 'cik-0000320193' for ad-hoc lookups
+  name            TEXT NOT NULL,
+  ticker          TEXT,
+  cik             TEXT,                              -- SEC CIK if applicable
+  business_line   TEXT,                              -- 'ecm' | 'dcm' | 'alts' (nullable: not always known up-front)
+  asset_class     TEXT,
+  entity_type     TEXT,                              -- 'public_company' | 'private_company' | 'sovereign' | 'muni' | 'security'
+  status          TEXT NOT NULL DEFAULT 'pending',   -- 'pending' | 'indexed' | 'archived' | 'failed'
+  last_queried_at TIMESTAMPTZ,                       -- driven by chat queries; powers the decay policy
+  metadata        JSONB,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_targets_bl     ON targets(business_line);
-CREATE INDEX IF NOT EXISTS idx_targets_ticker ON targets(ticker);
+CREATE INDEX IF NOT EXISTS idx_targets_bl           ON targets(business_line);
+CREATE INDEX IF NOT EXISTS idx_targets_ticker       ON targets(ticker);
+CREATE INDEX IF NOT EXISTS idx_targets_status       ON targets(status);
+CREATE INDEX IF NOT EXISTS idx_targets_last_queried ON targets(last_queried_at);
 
 -- Documents (filings, news articles, transcripts, model outputs)
 CREATE TABLE IF NOT EXISTS documents (
   id                TEXT PRIMARY KEY,
   target_id         TEXT REFERENCES targets(id) ON DELETE CASCADE,
-  source            TEXT NOT NULL,                 -- 'sec_edgar', 'msrb', 'fred', 'news_rss', 'compass_model'
-  doc_type          TEXT NOT NULL,                 -- '10-K', '10-Q', '8-K', 'S-1', 'news', 'feed', 'diligence', 'memo', 'action', 'monitor'
+  source            TEXT NOT NULL,                 -- 'sec_edgar', 'msrb', 'fred', 'news_rss', 'gdelt', 'uspto', 'compass_internal'
+  doc_type          TEXT NOT NULL,                 -- '10-K', '10-Q', '8-K', 'S-1', 'news', 'patent', 'macro', etc.
   title             TEXT NOT NULL,
   url               TEXT,
   content_full      TEXT,
@@ -39,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_target ON documents(target_id);
 CREATE INDEX IF NOT EXISTS idx_documents_filed  ON documents(filed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_documents_type   ON documents(doc_type);
 
--- Document chunks for RAG retrieval (voyage-3 returns 1024 dims)
+-- Document chunks (voyage-3 → 1024 dims)
 CREATE TABLE IF NOT EXISTS chunks (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
@@ -49,7 +54,8 @@ CREATE TABLE IF NOT EXISTS chunks (
   page_number INT,
   section     TEXT,
   metadata    JSONB,
-  created_at  TIMESTAMPTZ DEFAULT NOW()
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (document_id, chunk_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_document  ON chunks(document_id);
@@ -59,7 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding 
 CREATE TABLE IF NOT EXISTS model_runs (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   target_id  TEXT REFERENCES targets(id) ON DELETE CASCADE,
-  model_type TEXT NOT NULL,                        -- 'monte_carlo_irr', 'lbo', 'bond_pricing', 'ipo_valuation'
+  model_type TEXT NOT NULL,
   inputs     JSONB NOT NULL,
   outputs    JSONB NOT NULL,
   seed       INT,
@@ -79,22 +85,45 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE TABLE IF NOT EXISTS messages (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id   UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  role              TEXT NOT NULL,                 -- 'user' | 'assistant' | 'system'
+  role              TEXT NOT NULL,
   content           TEXT NOT NULL,
-  agent_activity    JSONB,                         -- which agents fired
-  citations         JSONB,                         -- source references
-  information_gaps  JSONB,                         -- what wasn't available
+  agent_activity    JSONB,
+  citations         JSONB,
+  information_gaps  JSONB,
   latency_ms        INT,
   created_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 
+-- Ingest run tracking (per-source per-target; powers the /admin/ingest page)
+CREATE TABLE IF NOT EXISTS ingest_runs (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_id       TEXT REFERENCES targets(id) ON DELETE CASCADE,
+  source          TEXT NOT NULL,                 -- 'sec_edgar', 'fred', 'gdelt', 'news_rss', 'uspto'
+  status          TEXT NOT NULL,                 -- 'success' | 'partial' | 'error'
+  documents_added INT DEFAULT 0,
+  chunks_added    INT DEFAULT 0,
+  error           TEXT,
+  duration_ms     INT,
+  ran_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_runs_target ON ingest_runs(target_id, ran_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ingest_runs_source ON ingest_runs(source, ran_at DESC);
+
+-- Per-source incremental cursors (used by background discovery scrapers)
+CREATE TABLE IF NOT EXISTS ingest_cursors (
+  source     TEXT PRIMARY KEY,                   -- 'edgar' | 'news_rss' | 'gdelt'
+  last_cursor TEXT,                              -- timestamp or token, source-specific
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Eval results (port from telco capstone harness)
 CREATE TABLE IF NOT EXISTS eval_runs (
   id                            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   test_name                     TEXT NOT NULL,
-  metric_groundedness           FLOAT,             -- 0-1
+  metric_groundedness           FLOAT,
   metric_retrieval_recall_at_5  FLOAT,
   metric_citation_accuracy      FLOAT,
   metric_prompt_injection_blocked BOOLEAN,
@@ -104,10 +133,12 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 
 -- RLS off for v1 single-user demo (per spec: "Auth: None").
 -- When v2 adds auth, enable RLS and add per-role policies instead.
-ALTER TABLE targets       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE documents     DISABLE ROW LEVEL SECURITY;
-ALTER TABLE chunks        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE model_runs    DISABLE ROW LEVEL SECURITY;
-ALTER TABLE conversations DISABLE ROW LEVEL SECURITY;
-ALTER TABLE messages      DISABLE ROW LEVEL SECURITY;
-ALTER TABLE eval_runs     DISABLE ROW LEVEL SECURITY;
+ALTER TABLE targets        DISABLE ROW LEVEL SECURITY;
+ALTER TABLE documents      DISABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks         DISABLE ROW LEVEL SECURITY;
+ALTER TABLE model_runs     DISABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations  DISABLE ROW LEVEL SECURITY;
+ALTER TABLE messages       DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_runs    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_cursors DISABLE ROW LEVEL SECURITY;
+ALTER TABLE eval_runs      DISABLE ROW LEVEL SECURITY;

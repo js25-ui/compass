@@ -51,7 +51,7 @@ export async function getTarget(id: string): Promise<DemoTarget | null> {
     async () => {
       const row = await dbGetTargetById(id);
       if (!row) return null;
-      if (!isBusinessLine(row.business_line)) return null;
+      if (!row.business_line || !isBusinessLine(row.business_line)) return null;
       return {
         id: row.id,
         bl: row.business_line,
@@ -68,10 +68,12 @@ export async function getTargetsByBL(bl: BusinessLine): Promise<DemoTarget[]> {
     async () => {
       const rows = await dbGetTargetsByBL(bl);
       return rows
-        .filter(r => isBusinessLine(r.business_line))
+        .filter((r): r is typeof r & { business_line: BusinessLine } =>
+          Boolean(r.business_line) && isBusinessLine(r.business_line!),
+        )
         .map(r => ({
           id: r.id,
-          bl: r.business_line as BusinessLine,
+          bl: r.business_line,
           title: r.name,
           ticker: r.ticker ?? undefined,
         }));
