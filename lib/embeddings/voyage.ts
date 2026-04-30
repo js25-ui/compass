@@ -1,8 +1,14 @@
 const VOYAGE_API = 'https://api.voyageai.com/v1/embeddings';
 const MODEL = 'voyage-3';
 export const VOYAGE_DIMS = 1024;
-const BATCH_SIZE = 128;
+const BATCH_SIZE = 96;
 const MAX_RETRIES = 3;
+const MIN_INTERVAL_MS = 21_000;       // free tier: 3 RPM, sliding window across all calls
+
+// Module-level cursor — covers the case where back-to-back ingestions in the
+// same Node process would each pass their own throttle but collectively
+// exceed Voyage's per-minute window.
+let lastCallAt = 0;
 
 interface VoyageResponse {
   data: Array<{ embedding: number[]; index: number }>;
@@ -28,11 +34,20 @@ export async function embedTexts(
   const out: number[][] = new Array(texts.length);
 
   for (let start = 0; start < texts.length; start += BATCH_SIZE) {
+    await throttle();
     const batch = texts.slice(start, start + BATCH_SIZE);
     const embeddings = await embedBatch(batch, inputType, apiKey);
     for (let i = 0; i < embeddings.length; i++) out[start + i] = embeddings[i];
   }
   return out;
+}
+
+async function throttle(): Promise<void> {
+  const elapsed = Date.now() - lastCallAt;
+  if (elapsed < MIN_INTERVAL_MS) {
+    await sleep(MIN_INTERVAL_MS - elapsed);
+  }
+  lastCallAt = Date.now();
 }
 
 async function embedBatch(
@@ -41,7 +56,7 @@ async function embedBatch(
   apiKey: string,
 ): Promise<number[][]> {
   let attempt = 0;
-  let lastError: unknown = null;
+  let lastDetail = '';
   while (attempt < MAX_RETRIES) {
     try {
       const res = await fetch(VOYAGE_API, {
@@ -52,21 +67,31 @@ async function embedBatch(
       if (res.status === 429) {
         await sleep((attempt + 1) * 2000);
         attempt += 1;
+        lastDetail = '429 rate limited';
         continue;
       }
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(`Voyage embedding failed (${res.status}): ${body.slice(0, 300)}`);
+        // 4xx errors won't be fixed by retrying — fail fast.
+        if (res.status >= 400 && res.status < 500) {
+          throw new Error(`Voyage HTTP ${res.status}: ${body.slice(0, 500)}`);
+        }
+        lastDetail = `HTTP ${res.status}: ${body.slice(0, 200)}`;
+        attempt += 1;
+        await sleep((attempt + 1) * 1000);
+        continue;
       }
       const json = (await res.json()) as VoyageResponse;
       return json.data.sort((a, b) => a.index - b.index).map(d => d.embedding);
     } catch (err) {
-      lastError = err;
-      await sleep((attempt + 1) * 1000);
+      // Re-throw 4xx errors immediately; otherwise retry.
+      if (err instanceof Error && /Voyage HTTP 4\d\d/.test(err.message)) throw err;
+      lastDetail = err instanceof Error ? err.message : String(err);
       attempt += 1;
+      await sleep(attempt * 1000);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error('Voyage embedding failed after retries');
+  throw new Error(`Voyage embedding failed after ${MAX_RETRIES} retries: ${lastDetail}`);
 }
 
 function sleep(ms: number): Promise<void> {
