@@ -1,11 +1,10 @@
-import { memoByBL, type BusinessLine } from '@/lib/demo-data';
+import type { Memo } from '@/lib/demo-data';
 
 interface MemoDocProps {
-  bl: BusinessLine;
+  memo: Memo;
 }
 
-export function MemoDoc({ bl }: MemoDocProps) {
-  const memo = memoByBL[bl];
+export function MemoDoc({ memo }: MemoDocProps) {
   return (
     <div className="stage-content">
       <div className="stage-intro">

@@ -1,17 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { mcByBL, modelTabsByBL, type BusinessLine } from '@/lib/demo-data';
+import { modelTabsByBL, type BusinessLine, type MonteCarloConfig } from '@/lib/demo-data';
 import { MonteCarloChart } from './MonteCarloChart';
 
 interface ModelStageProps {
   bl: BusinessLine;
+  config: MonteCarloConfig;
 }
 
-export function ModelStage({ bl }: ModelStageProps) {
+export function ModelStage({ bl, config }: ModelStageProps) {
   const tabs = modelTabsByBL[bl];
   const [activeTab, setActiveTab] = useState<string>('Monte Carlo');
-  const cfg = mcByBL[bl];
 
   return (
     <div className="stage-content">
@@ -41,7 +41,7 @@ export function ModelStage({ bl }: ModelStageProps) {
       </div>
 
       <div className="mc-prob-grid">
-        {cfg.probs.map(p => (
+        {config.probs.map(p => (
           <div key={p.label} className="prob-card">
             <div className={`prob-pct ${p.cls}`}>{p.val}</div>
             <div className="prob-label">{p.label}</div>
@@ -51,16 +51,16 @@ export function ModelStage({ bl }: ModelStageProps) {
 
       <div className="mc-grid">
         <div className="mc-chart-card">
-          <h4>{cfg.chartTitle}</h4>
+          <h4>{config.chartTitle}</h4>
           <div className="mc-chart-wrap">
-            <MonteCarloChart bl={bl} config={cfg} />
+            <MonteCarloChart bl={bl} config={config} />
           </div>
         </div>
         <div className="mc-side-card">
-          <h4>{cfg.pctTitle}</h4>
+          <h4>{config.pctTitle}</h4>
           <table className="pct-table">
             <tbody>
-              {cfg.pcts.map(p => (
+              {config.pcts.map(p => (
                 <tr key={p.l}>
                   <td className="pct-label">{p.l}</td>
                   <td className={`pct-value${p.cls ? ' ' + p.cls : ''}`}>{p.v}</td>

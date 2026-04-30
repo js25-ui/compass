@@ -1,7 +1,7 @@
-import { monitorByBL, type BusinessLine } from '@/lib/demo-data';
+import type { MonitorData } from '@/lib/demo-data';
 
 interface MonitorPanelProps {
-  bl: BusinessLine;
+  data: MonitorData;
 }
 
 function changeClass(change: string): string {
@@ -10,8 +10,7 @@ function changeClass(change: string): string {
   return '';
 }
 
-export function MonitorPanel({ bl }: MonitorPanelProps) {
-  const m = monitorByBL[bl];
+export function MonitorPanel({ data }: MonitorPanelProps) {
   return (
     <div className="stage-content">
       <div className="stage-intro">
@@ -19,7 +18,7 @@ export function MonitorPanel({ bl }: MonitorPanelProps) {
         <p>Post-execution tracking and anomaly detection.</p>
       </div>
       <div className="kpi-grid">
-        {m.kpis.map(k => (
+        {data.kpis.map(k => (
           <div key={k.label} className="kpi-card">
             <div className="kpi-label">{k.label}</div>
             <div className="kpi-value">{k.value}</div>
@@ -29,7 +28,7 @@ export function MonitorPanel({ bl }: MonitorPanelProps) {
       </div>
       <div className="data-card">
         <h3>Active Alerts and Anomalies</h3>
-        {m.alerts.map(a => (
+        {data.alerts.map(a => (
           <div key={a.title} className="alert-item">
             <div className={`alert-icon ${a.type}`}>{a.type === 'green' ? '✓' : '!'}</div>
             <div className="alert-content">

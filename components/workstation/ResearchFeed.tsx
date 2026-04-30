@@ -1,21 +1,15 @@
-import {
-  feedByBL,
-  metricsByBL,
-  quickQByBL,
-  subtagsByBL,
-  type BusinessLine,
-} from '@/lib/demo-data';
+import { subtagsByBL, type BusinessLine, type FeedItem, type Metric } from '@/lib/demo-data';
 
 interface ResearchFeedProps {
   bl: BusinessLine;
+  feed: FeedItem[];
+  metrics: Metric[];
+  quickQs: string[];
   activeSubtag: string;
   onSubtagChange: (id: string) => void;
 }
 
-export function ResearchFeed({ bl, activeSubtag, onSubtagChange }: ResearchFeedProps) {
-  const feed = feedByBL[bl];
-  const metrics = metricsByBL[bl];
-  const quickQs = quickQByBL[bl];
+export function ResearchFeed({ bl, feed, metrics, quickQs, activeSubtag, onSubtagChange }: ResearchFeedProps) {
   const subtags = subtagsByBL[bl];
 
   return (

@@ -1,11 +1,10 @@
-import { dilByBL, type BusinessLine } from '@/lib/demo-data';
+import type { DiligenceItem } from '@/lib/demo-data';
 
 interface DiligenceGridProps {
-  bl: BusinessLine;
+  items: DiligenceItem[];
 }
 
-export function DiligenceGrid({ bl }: DiligenceGridProps) {
-  const items = dilByBL[bl];
+export function DiligenceGrid({ items }: DiligenceGridProps) {
   return (
     <div className="stage-content">
       <div className="stage-intro">

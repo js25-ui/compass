@@ -6,9 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed": "tsx scripts/seed_db.ts"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
     "next": "^15.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -22,6 +27,7 @@
     "eslint": "^9",
     "eslint-config-next": "^15.5.0",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
