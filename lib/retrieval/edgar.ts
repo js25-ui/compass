@@ -12,16 +12,19 @@ export interface EdgarFiling {
   size: number | null;
 }
 
+interface FilingsBlock {
+  accessionNumber: string[];
+  filingDate: string[];
+  reportDate: string[];
+  form: string[];
+  primaryDocument: string[];
+  size: number[];
+}
+
 interface FilingsRecentResponse {
   filings: {
-    recent: {
-      accessionNumber: string[];
-      filingDate: string[];
-      reportDate: string[];
-      form: string[];
-      primaryDocument: string[];
-      size: number[];
-    };
+    recent: FilingsBlock;
+    files?: Array<{ name: string; filingCount: number; filingFrom: string; filingTo: string }>;
   };
 }
 
@@ -41,35 +44,67 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** List recent filings for a CIK (zero-padded 10-digit). Filters to common form types. */
-export async function listFilings(cik: string, opts: { limit?: number; forms?: string[] } = {}): Promise<EdgarFiling[]> {
-  const padded = cik.padStart(10, '0');
-  const url = `${EDGAR_BASE}/submissions/CIK${padded}.json`;
-  const data = await fetchJson<FilingsRecentResponse>(url);
+export interface ListFilingsOptions {
+  limit?: number;
+  forms?: string[];
+  /** Inclusive ISO date "YYYY-MM-DD" — filters by filedAt. */
+  fromDate?: string;
+  /** Inclusive ISO date "YYYY-MM-DD" — filters by filedAt. */
+  toDate?: string;
+}
 
-  const recent = data.filings.recent;
+/** List filings for a CIK. Walks paginated history when `fromDate` predates the recent block. */
+export async function listFilings(cik: string, opts: ListFilingsOptions = {}): Promise<EdgarFiling[]> {
+  const padded = cik.padStart(10, '0');
+  const data = await fetchJson<FilingsRecentResponse>(`${EDGAR_BASE}/submissions/CIK${padded}.json`);
   const allowed = new Set(opts.forms ?? Array.from(TARGET_FORMS));
   const limit = opts.limit ?? 20;
+  const fromTs = opts.fromDate ? new Date(opts.fromDate).getTime() : -Infinity;
+  const toTs = opts.toDate ? new Date(opts.toDate).getTime() : Infinity;
 
-  const filings: EdgarFiling[] = [];
-  for (let i = 0; i < recent.accessionNumber.length && filings.length < limit; i++) {
-    const form = recent.form[i];
-    if (!allowed.has(form)) continue;
-    const accession = recent.accessionNumber[i];
-    const accessionNoDash = accession.replace(/-/g, '');
-    const primaryDocument = recent.primaryDocument[i];
-    filings.push({
-      accessionNumber: accession,
-      formType: form,
-      filedAt: recent.filingDate[i],
-      reportDate: recent.reportDate[i] || null,
-      primaryDocument,
-      primaryDocumentUrl: `${EDGAR_ARCHIVE}/${unpadCik(padded)}/${accessionNoDash}/${primaryDocument}`,
-      size: recent.size[i] ?? null,
-    });
+  const blocks: FilingsBlock[] = [data.filings.recent];
+
+  // Pull older paginated submission files when needed.
+  if (opts.fromDate && data.filings.files) {
+    for (const f of data.filings.files) {
+      const blockFrom = new Date(f.filingFrom).getTime();
+      const blockTo = new Date(f.filingTo).getTime();
+      if (blockTo < fromTs) continue;
+      if (blockFrom > toTs) continue;
+      try {
+        const extra = await fetchJson<FilingsBlock>(`${EDGAR_BASE}/submissions/${f.name}`);
+        blocks.push(extra);
+      } catch {
+        // Skip unreachable history files; partial coverage is better than crashing.
+      }
+    }
   }
 
-  return filings;
+  const filings: EdgarFiling[] = [];
+  for (const block of blocks) {
+    for (let i = 0; i < block.accessionNumber.length && filings.length < limit; i++) {
+      const form = block.form[i];
+      if (!allowed.has(form)) continue;
+      const filedAt = block.filingDate[i];
+      const filedTs = new Date(filedAt).getTime();
+      if (filedTs < fromTs || filedTs > toTs) continue;
+      const accession = block.accessionNumber[i];
+      const accessionNoDash = accession.replace(/-/g, '');
+      const primaryDocument = block.primaryDocument[i];
+      filings.push({
+        accessionNumber: accession,
+        formType: form,
+        filedAt,
+        reportDate: block.reportDate[i] || null,
+        primaryDocument,
+        primaryDocumentUrl: `${EDGAR_ARCHIVE}/${unpadCik(padded)}/${accessionNoDash}/${primaryDocument}`,
+        size: block.size[i] ?? null,
+      });
+    }
+    if (filings.length >= limit) break;
+  }
+
+  return filings.sort((a, b) => (a.filedAt < b.filedAt ? 1 : -1));
 }
 
 /** Fetch the primary document and strip HTML to plain text. */

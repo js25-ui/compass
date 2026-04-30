@@ -27,19 +27,35 @@ function fredKey(): string {
   return key;
 }
 
+export interface FetchSeriesOptions {
+  /** ISO date "YYYY-MM-DD". Defaults to one year ago. */
+  observationStart?: string;
+  /** ISO date "YYYY-MM-DD". Defaults to today. */
+  observationEnd?: string;
+  limit?: number;
+}
+
 /** Fetch a single FRED series by ID with recent observations (default last 1y). */
-export async function fetchSeries(seriesId: string, opts: { observationStart?: string; limit?: number } = {}): Promise<FredSeries> {
+export async function fetchSeries(seriesId: string, opts: FetchSeriesOptions = {}): Promise<FredSeries> {
   const apiKey = fredKey();
   const start = opts.observationStart ?? oneYearAgoIso();
-  const limit = opts.limit ?? 365;
+  const end = opts.observationEnd ?? new Date().toISOString().slice(0, 10);
+  const limit = opts.limit ?? 100_000;
+
+  const obsUrl = new URL(`${FRED_BASE}/series/observations`);
+  obsUrl.searchParams.set('series_id', seriesId);
+  obsUrl.searchParams.set('observation_start', start);
+  obsUrl.searchParams.set('observation_end', end);
+  obsUrl.searchParams.set('limit', String(limit));
+  obsUrl.searchParams.set('sort_order', 'asc');
+  obsUrl.searchParams.set('api_key', apiKey);
+  obsUrl.searchParams.set('file_type', 'json');
 
   const [info, obs] = await Promise.all([
     fetchJson<FredSeriesInfoResponse>(
       `${FRED_BASE}/series?series_id=${encodeURIComponent(seriesId)}&api_key=${apiKey}&file_type=json`,
     ),
-    fetchJson<FredObservationsResponse>(
-      `${FRED_BASE}/series/observations?series_id=${encodeURIComponent(seriesId)}&observation_start=${start}&limit=${limit}&sort_order=desc&api_key=${apiKey}&file_type=json`,
-    ),
+    fetchJson<FredObservationsResponse>(obsUrl.toString()),
   ]);
 
   if (!info.seriess?.[0]) throw new Error(`FRED series not found: ${seriesId}`);
