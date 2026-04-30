@@ -1,4 +1,3 @@
-import 'server-only';
 import { findByCik, findByName, findByTicker, type SecTickerEntry } from './sec_tickers';
 import { matchCurated, type CuratedEntity } from './curated';
 import type { EntityType } from '@/lib/db/types';
