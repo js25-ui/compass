@@ -60,45 +60,33 @@ function nowTimeString() {
 
 function activityLabelFor(event: ChatEvent): string | null {
   switch (event.type) {
-    case 'extracting': return 'Orchestrator · extracting entities';
-    case 'extracted': {
-      if (event.entities.length === 0) return null;        // category path will fill in
-      const names = event.entities.map(e => e.ticker ?? e.name).join(', ');
-      return `Resolved: ${names}`;
-    }
-    case 'category_detected': return `Category detected: ${event.label}`;
-    case 'category_suggestions':
-      return event.suggestions.length > 0
-        ? `Haiku suggested issuers: ${event.suggestions.join(', ')}`
-        : null;
-    case 'category_resolved': {
-      const names = event.entities.map(e => e.ticker ?? e.name).join(', ');
-      return event.entities.length > 0 ? `Resolved proxies: ${names}` : null;
-    }
-    case 'ingesting': return `Ingesting ${event.entity}`;
-    case 'ingest_progress': {
-      const nested = event.event;
-      if (nested.type === 'fetched') {
-        return `${event.entity} · ${nested.source} → ${nested.count} docs`;
-      }
-      if (nested.type === 'done') {
-        return `${event.entity} · indexed ${nested.documentsAdded} docs, ${nested.chunksAdded} chunks`;
-      }
-      return null;
-    }
-    case 'ingest_complete': return null;
-    case 'cache_hit': return `${event.entity} cached (${event.documents} docs, ${event.chunks} chunks)`;
-    case 'retrieving': return `${event.mode === 'recent' ? 'Recency' : 'Vector'} search · top ${event.topK}`;
-    case 'retrieved': return null;                         // sources event will summarize
+    case 'thinking': return 'Compass · thinking';
+    case 'tool_call': return formatToolCall(event.name, event.input);
+    case 'tool_result': return event.summary;
     case 'sources': {
-      if (event.sources.length === 0) return 'No sources retrieved';
+      if (event.sources.length === 0) return null;
       const counts = countBySource(event.sources);
       const parts = Object.entries(counts).map(([k, v]) => `${v} ${k}`);
-      return `Retrieved ${event.sources.length} sources (${parts.join(', ')})`;
+      return `Citing ${event.sources.length} sources (${parts.join(', ')})`;
     }
-    case 'thinking': return 'Memo Agent · synthesizing answer';
     default: return null;
   }
+}
+
+function formatToolCall(name: string, input: Record<string, unknown>): string {
+  if (name === 'search_corpus') {
+    const q = String(input.query ?? '').slice(0, 80);
+    return `→ search_corpus("${q}")`;
+  }
+  if (name === 'list_indexed_entities') return '→ list_indexed_entities()';
+  if (name === 'list_recent_corpus') {
+    const days = input.days_back ?? 30;
+    return `→ list_recent_corpus(${days}d)`;
+  }
+  if (name === 'ingest_entity') {
+    return `→ ingest_entity("${String(input.entity ?? '')}")`;
+  }
+  return `→ ${name}(${JSON.stringify(input).slice(0, 60)})`;
 }
 
 function countBySource(sources: ChatSource[]): Record<string, number> {
@@ -118,29 +106,15 @@ function prettySourceShort(source: string, docType: string): string {
   return source;
 }
 
-interface ExtractedEntity { id: string; name: string; ticker?: string }
 type ChatEvent =
   | { type: 'started'; query: string }
-  | { type: 'extracting' }
-  | { type: 'extracted'; entities: ExtractedEntity[]; unresolved: { name: string }[]; intent: string; isHistorical: boolean }
-  | { type: 'category_detected'; category: string; label: string }
-  | { type: 'category_suggestions'; suggestions: string[] }
-  | { type: 'category_resolved'; entities: ExtractedEntity[] }
-  | { type: 'clarification_needed'; question: string }
-  | { type: 'cache_hit'; entity: string; documents: number; chunks: number }
-  | { type: 'ingesting'; entity: string }
-  | { type: 'ingest_progress'; entity: string; event: { type: string; source?: string; count?: number; documentsAdded?: number; chunksAdded?: number } }
-  | { type: 'ingest_complete'; entity: string; finalEventType: string }
-  | { type: 'ingest_skipped'; entity: string; reason: string }
-  | { type: 'ingest_truncated'; entity: string }
-  | { type: 'retrieving'; topK: number; mode?: 'vector' | 'recent' }
-  | { type: 'retrieved'; chunkCount: number }
-  | { type: 'retrieval_error'; error: string }
-  | { type: 'sources'; sources: ChatSource[] }
   | { type: 'thinking' }
+  | { type: 'tool_call'; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; summary: string }
+  | { type: 'sources'; sources: ChatSource[] }
   | { type: 'token'; text: string }
   | { type: 'usage'; input: number; output: number }
-  | { type: 'done'; latencyMs: number }
+  | { type: 'done'; latencyMs: number; turns?: number }
   | { type: 'error'; error: string };
 
 function ConversationView() {
@@ -207,7 +181,7 @@ function ConversationView() {
           let event: ChatEvent;
           try { event = JSON.parse(line) as ChatEvent; } catch { continue; }
           handleEvent(event);
-          if (event.type === 'done' || event.type === 'error' || event.type === 'clarification_needed') {
+          if (event.type === 'done' || event.type === 'error') {
             finished = true;
             break;
           }
@@ -225,12 +199,6 @@ function ConversationView() {
         }
         if (event.type === 'token') {
           updateAssistant(t => ({ ...t, html: t.html + event.text }));
-        }
-        if (event.type === 'clarification_needed') {
-          updateAssistant(t => ({
-            ...t,
-            html: `<p><strong>Quick question to focus the answer:</strong> ${event.question}</p>`,
-          }));
         }
         if (event.type === 'error') {
           updateAssistant(t => ({ ...t, error: event.error }));

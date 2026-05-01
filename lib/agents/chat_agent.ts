@@ -1,0 +1,343 @@
+/**
+ * Tool-using chat agent.
+ *
+ * Sonnet drives the entire conversation. It has full domain knowledge of
+ * capital-markets terminology (ECM, DCM, munis, PE, etc.) and decides on
+ * its own which tools to call to answer the user's question. No hardcoded
+ * category tables, no static proxy lists — the model picks what to research.
+ */
+
+import type Anthropic from '@anthropic-ai/sdk';
+import { getAnthropic, SONNET_MODEL } from '@/lib/llm/anthropic';
+import { ingestEntity } from '@/lib/ingest/pipeline';
+import {
+  listIndexedEntities,
+  recentCorpusSnapshot,
+  searchChunks,
+  type RetrievedChunk,
+} from '@/lib/retrieval/vector_search';
+
+const MAX_TURNS = 5;
+const INGEST_BUDGET_MS = 25_000;
+
+const SYSTEM_PROMPT = `You are Compass, a capital-markets analyst assistant. You help users research companies, deals, securities, and market activity.
+
+Voice: a professional analyst on a desk — direct, substantive, no filler. Conversational but serious. Don't over-explain terminology unless context suggests the user needs it.
+
+You have full domain knowledge of capital markets:
+- ECM (equity capital markets): IPOs, follow-ons, secondaries, SPACs, equity issuance
+- DCM (debt capital markets): IG and HY corporate bonds, new-issue activity, credit spreads, indentures
+- Munis: GO bonds, revenue bonds, state/city issuance, tax-exempt
+- Sovereigns: Treasuries, gilts, EM debt
+- Alternatives: PE, LBOs, hedge funds, private credit, infrastructure, real estate, BDCs
+- Macro: Fed policy, FOMC, OAS, IG and HY spreads, Treasury curve, FX
+- Workflows: pricing, allocation, syndication, risk, sourcing, comp screens
+
+Tools available:
+- search_corpus: vector search over the indexed corpus (SEC filings + news + macro)
+- list_indexed_entities: see what's already in the corpus
+- list_recent_corpus: see the latest documents added across all entities
+- ingest_entity: pull SEC filings + news for an entity (10-25 seconds; use sparingly)
+
+How to think:
+
+1. ALWAYS use tools to ground your answer. Don't answer from memory alone — call search_corpus first to see what the corpus actually contains.
+
+2. If the query is about a specific company/security/topic, search_corpus with descriptive natural language. If retrieval is empty and the entity is identifiable, call ingest_entity then search again.
+
+3. If the query is broad ("what's new in ECM", "muni activity"): interpret it (ECM = equity capital markets — IPOs, follow-ons, secondaries). Call list_indexed_entities OR list_recent_corpus to see what's covered, then search_corpus with the right terms. If a representative issuer would help and isn't covered, ingest it.
+
+4. If the query is genuinely ambiguous ("compare to comps" with no anchor; "the deal" with no antecedent): ask ONE specific clarifying question. Don't bounce the user when the question is broad-but-answerable.
+
+5. After your tool calls, write the final answer.
+
+Citation rules — strictly enforced:
+- Every search_corpus result includes a stable citation number "n" — use those in your answer as <a class="chat-citation" href="#source-N">N</a>.
+- Distinguish primary (SEC filings) from secondary (news) when relevant.
+- Every numerical value should include "as of [date]" using the source's filed_at.
+- If retrieval is empty, say so explicitly. Never fabricate filings, prices, deal terms, or quotes.
+- If the user asks about a date range you can't cover, name the gap.
+
+Output format:
+- Plain HTML for the final answer: <p>, <strong>, <ul>, <a class="chat-citation" href="#source-N">N</a>.
+- Lead with the direct answer, then evidence, then caveats.
+- Keep it tight: 3-5 paragraphs unless the user explicitly asks for depth.
+- Don't output a sources list — the UI renders it separately.`;
+
+interface ToolDef {
+  name: string;
+  description: string;
+  input_schema: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+const TOOLS: ToolDef[] = [
+  {
+    name: 'search_corpus',
+    description: 'Vector-similarity search over indexed text chunks. Returns the top matching chunks with their source documents.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Natural-language search query, e.g. "Boeing debt profile" or "recent IPO activity in tech"' },
+        target_ids: { type: 'array', items: { type: 'string' }, description: 'Optional: filter to specific entity IDs (from list_indexed_entities)' },
+        top_k: { type: 'number', description: 'Number of chunks to return (default 8, max 12)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'list_indexed_entities',
+    description: 'List entities currently indexed in the corpus, ordered by most recently queried.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_recent_corpus',
+    description: 'List the most recent documents added across all indexed entities. Useful for "what is new" style queries.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days_back: { type: 'number', description: 'Lookback window in days (default 30, max 90)' },
+        limit: { type: 'number', description: 'Max documents to return (default 12)' },
+      },
+    },
+  },
+  {
+    name: 'ingest_entity',
+    description: 'Pull recent SEC filings, XBRL facts, news, and GDELT articles for an entity into the corpus. Takes 10-25 seconds. Use only when the corpus genuinely lacks coverage for the entity the user asked about.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'string', description: 'Company name, ticker, or curated entity (e.g. "Apple", "AAPL", "New York City")' },
+      },
+      required: ['entity'],
+    },
+  },
+];
+
+export interface AgentSourceCitation {
+  n: number;
+  title: string;
+  url: string | null;
+  source: string;
+  docType: string;
+  filedAt: string | null;
+  isPrimary: boolean;
+  similarity: number;
+  targetId: string | null;
+}
+
+export type AgentEvent =
+  | { type: 'thinking' }
+  | { type: 'tool_call'; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; summary: string }
+  | { type: 'sources'; sources: AgentSourceCitation[] }
+  | { type: 'token'; text: string }
+  | { type: 'usage'; input: number; output: number }
+  | { type: 'done'; latencyMs: number; turns: number }
+  | { type: 'error'; error: string };
+
+interface AgentState {
+  citationCounter: number;
+  citations: AgentSourceCitation[];
+  ingestStartedAt: number;
+}
+
+export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
+  const startedAt = Date.now();
+  const client = getAnthropic();
+  const state: AgentState = {
+    citationCounter: 0,
+    citations: [],
+    ingestStartedAt: 0,
+  };
+
+  const messages: Anthropic.Messages.MessageParam[] = [
+    { role: 'user', content: query },
+  ];
+
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    yield { type: 'thinking' };
+
+    let response: Anthropic.Messages.Message;
+    try {
+      response = await client.messages.create({
+        model: SONNET_MODEL,
+        max_tokens: 2000,
+        system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+        tools: TOOLS as unknown as Anthropic.Messages.Tool[],
+        messages,
+      });
+    } catch (err) {
+      yield { type: 'error', error: err instanceof Error ? err.message : 'Sonnet call failed' };
+      return;
+    }
+
+    const toolUses = response.content.filter(
+      (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
+    );
+    const textBlocks = response.content.filter(
+      (b): b is Anthropic.Messages.TextBlock => b.type === 'text',
+    );
+
+    if (toolUses.length === 0) {
+      // Final answer turn
+      if (state.citations.length > 0) {
+        yield { type: 'sources', sources: state.citations };
+      }
+      const finalText = textBlocks.map(b => b.text).join('');
+      if (finalText) yield { type: 'token', text: finalText };
+      yield {
+        type: 'usage',
+        input: response.usage.input_tokens,
+        output: response.usage.output_tokens,
+      };
+      yield { type: 'done', latencyMs: Date.now() - startedAt, turns: turn + 1 };
+      return;
+    }
+
+    // Run tools
+    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+    for (const toolUse of toolUses) {
+      yield { type: 'tool_call', name: toolUse.name, input: toolUse.input as Record<string, unknown> };
+      const result = await executeTool(toolUse.name, toolUse.input as Record<string, unknown>, state);
+      yield { type: 'tool_result', name: toolUse.name, summary: result.summary };
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: result.content,
+      });
+    }
+
+    messages.push({ role: 'assistant', content: response.content });
+    messages.push({ role: 'user', content: toolResults });
+  }
+
+  yield { type: 'error', error: 'Agent exceeded maximum tool-use turns' };
+}
+
+interface ToolResult {
+  summary: string;
+  content: string;
+}
+
+async function executeTool(
+  name: string,
+  input: Record<string, unknown>,
+  state: AgentState,
+): Promise<ToolResult> {
+  try {
+    if (name === 'search_corpus') {
+      const query = String(input.query ?? '');
+      const topK = Math.min(Number(input.top_k ?? 8), 12);
+      const targetIds = Array.isArray(input.target_ids) ? (input.target_ids as string[]) : undefined;
+      const chunks = await searchChunks(query, { topK, targetIds });
+      return formatSearchResult(chunks, state, `search_corpus("${query.slice(0, 60)}")`);
+    }
+
+    if (name === 'list_indexed_entities') {
+      const entities = await listIndexedEntities();
+      const summary = entities.length === 0
+        ? 'corpus is empty'
+        : `${entities.length} indexed entities`;
+      const content = JSON.stringify(
+        entities.map(e => ({ id: e.id, name: e.name, ticker: e.ticker })),
+      );
+      return { summary, content };
+    }
+
+    if (name === 'list_recent_corpus') {
+      const daysBack = Math.min(Number(input.days_back ?? 30), 90);
+      const limit = Math.min(Number(input.limit ?? 12), 25);
+      const chunks = await recentCorpusSnapshot({ daysBack, limit });
+      return formatSearchResult(chunks, state, `list_recent_corpus(${daysBack}d)`);
+    }
+
+    if (name === 'ingest_entity') {
+      const entity = String(input.entity ?? '').trim();
+      if (!entity) return { summary: 'no entity given', content: 'error: entity is required' };
+      if (state.ingestStartedAt > 0) {
+        return { summary: 'ingest budget already used', content: 'error: only one ingest_entity call allowed per query' };
+      }
+      state.ingestStartedAt = Date.now();
+      let docs = 0;
+      let chunks = 0;
+      let targetId: string | null = null;
+      let unresolved = false;
+      const deadline = state.ingestStartedAt + INGEST_BUDGET_MS;
+      for await (const ev of ingestEntity(entity, { mode: 'full' })) {
+        if (Date.now() > deadline) break;
+        if (ev.type === 'done') {
+          docs = ev.documentsAdded;
+          chunks = ev.chunksAdded;
+          targetId = ev.targetId;
+        } else if (ev.type === 'cached') {
+          docs = ev.documents;
+          chunks = ev.chunks;
+          targetId = ev.targetId;
+        } else if (ev.type === 'unresolved') {
+          unresolved = true;
+        }
+      }
+      if (unresolved) {
+        return {
+          summary: `couldn't resolve "${entity}"`,
+          content: JSON.stringify({ resolved: false }),
+        };
+      }
+      return {
+        summary: `${entity}: ${docs} docs, ${chunks} chunks indexed`,
+        content: JSON.stringify({ resolved: true, target_id: targetId, documents: docs, chunks }),
+      };
+    }
+
+    return { summary: 'unknown tool', content: `error: unknown tool ${name}` };
+  } catch (err) {
+    return {
+      summary: `${name} failed`,
+      content: `error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+function formatSearchResult(chunks: RetrievedChunk[], state: AgentState, label: string): ToolResult {
+  if (chunks.length === 0) {
+    return { summary: `${label}: no matches`, content: '[]' };
+  }
+
+  const numbered = chunks.map(chunk => {
+    state.citationCounter += 1;
+    const n = state.citationCounter;
+    state.citations.push({
+      n,
+      title: chunk.documentTitle,
+      url: chunk.documentUrl,
+      source: chunk.documentSource,
+      docType: chunk.documentType,
+      filedAt: chunk.filedAt,
+      isPrimary: chunk.isPrimarySource,
+      similarity: Number(chunk.similarity.toFixed(3)),
+      targetId: chunk.targetId,
+    });
+    return {
+      n,
+      title: chunk.documentTitle,
+      source: chunk.documentSource,
+      doc_type: chunk.documentType,
+      filed_at: chunk.filedAt,
+      is_primary: chunk.isPrimarySource,
+      url: chunk.documentUrl,
+      excerpt: chunk.content.slice(0, 800),
+    };
+  });
+
+  const counts: Record<string, number> = {};
+  for (const c of chunks) {
+    const key = c.documentSource;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  const summary = `${label}: ${chunks.length} chunks (${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')})`;
+  return { summary, content: JSON.stringify(numbered) };
+}
