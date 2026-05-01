@@ -55,11 +55,11 @@ export async function POST(request: NextRequest) {
           isHistorical: result.isHistorical,
         });
 
-        if (result.needsClarification && result.clarificationQuestion) {
-          emit({ type: 'clarification_needed', question: result.clarificationQuestion });
-          emit({ type: 'done', latencyMs: Date.now() - startedAt });
-          closeOnce();
-          return;
+        // Clarification is intentionally suppressed — the memo agent handles
+        // vagueness inline by working with what's available rather than
+        // bouncing the user. Logged for observability only.
+        if (result.needsClarification) {
+          emit({ type: 'clarification_suppressed', question: result.clarificationQuestion });
         }
 
         // 2. Ingest any unindexed entities (best-effort, time-budgeted)

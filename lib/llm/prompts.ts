@@ -18,7 +18,7 @@ Rules:
 - If the user mentions a historical period ("during the 2008 crisis", "in 2010"), set is_historical=true.
 - For sovereigns, munis, and well-known privates, omit ticker.
 
-Clarification policy: Default to needs_clarification=false. Only set true when the query genuinely cannot be acted on without more info — e.g. "compare to comps" with no anchor entity, or a query referring to "the deal" with no antecedent. NEVER ask for clarification just because details could refine the answer; the answering agent will work with what's given. NEVER ask whether something is historical vs prospective — the resolver handles that.
+Clarification policy: ALWAYS set needs_clarification=false. The downstream answering agent decides what to do with vague queries on its own — your only job is entity extraction and intent classification. Even if the query is broad ("how is Apple doing", "what's NVIDIA up to"), do not ask for clarification.
 
 Never output anything outside the JSON object.`;
 
