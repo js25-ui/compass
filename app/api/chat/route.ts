@@ -1,11 +1,12 @@
 import { NextRequest } from 'next/server';
 import { orchestrate } from '@/lib/agents/orchestrator';
+import { detectCategory, type DetectedCategory } from '@/lib/agents/categories';
 import { streamSonnet } from '@/lib/llm/anthropic';
 import { MEMO_AGENT_PROMPT } from '@/lib/llm/prompts';
 import { listIndexedEntities, recentCorpusSnapshot, searchChunks, type RetrievedChunk } from '@/lib/retrieval/vector_search';
 import { ingestEntity } from '@/lib/ingest/pipeline';
 import { getTargetSnapshot } from '@/lib/ingest/persist';
-import type { ResolvedEntity } from '@/lib/lookup/resolve';
+import { resolveEntity, type ResolvedEntity } from '@/lib/lookup/resolve';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,11 +56,29 @@ export async function POST(request: NextRequest) {
           isHistorical: result.isHistorical,
         });
 
-        // Clarification is intentionally suppressed — the memo agent handles
-        // vagueness inline by working with what's available rather than
-        // bouncing the user. Logged for observability only.
         if (result.needsClarification) {
           emit({ type: 'clarification_suppressed', question: result.clarificationQuestion });
+        }
+
+        // 1a. Category fallback: deterministic match for ECM/DCM/munis/PE/etc.
+        // expands to a small proxy entity set that goes through the same
+        // resolve → ingest → retrieve pipeline.
+        let category: DetectedCategory | null = null;
+        if (result.resolved.length === 0) {
+          category = detectCategory(query);
+          if (category) {
+            emit({ type: 'category_detected', category: category.category, label: category.label });
+            for (const proxy of category.proxies) {
+              const resolved = await resolveEntity(proxy.query);
+              if (resolved && !result.resolved.some(r => r.id === resolved.id)) {
+                result.resolved.push(resolved);
+              }
+            }
+            emit({
+              type: 'category_proxies',
+              entities: result.resolved.map(e => ({ id: e.id, name: e.name, ticker: e.ticker })),
+            });
+          }
         }
 
         // 2. Ingest any unindexed entities (best-effort, time-budgeted)
@@ -117,7 +136,7 @@ export async function POST(request: NextRequest) {
 
         // 5. Synthesize answer (Sonnet stream)
         emit({ type: 'thinking' });
-        const userMessage = buildUserPrompt(query, chunks, result.resolved, result.unresolved, indexedEntities);
+        const userMessage = buildUserPrompt(query, chunks, result.resolved, result.unresolved, indexedEntities, category);
         for await (const ev of streamSonnet({
           systemPrompt: MEMO_AGENT_PROMPT,
           userMessage,
@@ -179,6 +198,7 @@ function buildUserPrompt(
   resolved: ResolvedEntity[],
   unresolved: Array<{ name: string }>,
   indexedEntities: Array<{ id: string; name: string; ticker: string | null }>,
+  category: DetectedCategory | null,
 ): string {
   const sourceBlocks = chunks.map((c, idx) => {
     const cite = idx + 1;
@@ -189,22 +209,25 @@ function buildUserPrompt(
 
   const entitiesBlock = resolved.length > 0
     ? `Entities resolved: ${resolved.map(e => `${e.name}${e.ticker ? ` (${e.ticker})` : ''}`).join(', ')}`
-    : 'No specific entity was extracted from this query — treat it as a broad market question.';
+    : 'No specific entity was extracted from this query.';
   const unresolvedBlock = unresolved.length > 0
     ? `Could not resolve: ${unresolved.map(e => e.name).join(', ')}`
     : '';
 
   const indexedBlock = indexedEntities.length > 0
-    ? `Indexed entities currently in the corpus (use these to suggest concrete follow-up queries): ${indexedEntities.map(e => `${e.name}${e.ticker ? ` (${e.ticker})` : ''}`).join(', ')}`
+    ? `Other indexed entities in the corpus (suggest as follow-ups): ${indexedEntities.map(e => `${e.name}${e.ticker ? ` (${e.ticker})` : ''}`).join(', ')}`
     : '';
 
   const sourcesText = sourceBlocks.length > 0
     ? `Retrieved sources (use [N] inline citations matching the bracketed number):\n\n${sourceBlocks.join('\n\n---\n\n')}`
     : 'No sources were retrieved from the corpus. Acknowledge the gap honestly. Suggest what data would need to be ingested.';
 
-  const broadHint = resolved.length === 0
-    ? '\n\nThis is a broad / market-level query. The retrieved sources are the most-recent items across the entire indexed corpus (not vector-similarity matches). Synthesize what is happening across the named issuers and explicitly point the user toward the indexed entities listed above so they can drill into a specific name.'
-    : '';
+  let modeHint = '';
+  if (category) {
+    modeHint = `\n\nThis is a CATEGORY-LEVEL query about ${category.label} (${category.category}). The retrieved sources come from a small set of proxy issuers chosen as representatives of that category — they are NOT exhaustive. Synthesize what's happening across these proxies as a category-level view, attribute claims to the specific issuer/source, and end with a sentence inviting the user to drill into a specific name (e.g. "Want me to dig into JPMorgan's debt book specifically?").`;
+  } else if (resolved.length === 0) {
+    modeHint = `\n\nThis is a broad market query. The retrieved sources are the most-recent items across the entire indexed corpus. Describe what the corpus contains and point the user to specific entities they could ask about.`;
+  }
 
-  return `User query: ${query}\n\n${entitiesBlock}\n${unresolvedBlock}\n${indexedBlock}\n\n${sourcesText}${broadHint}`;
+  return `User query: ${query}\n\n${entitiesBlock}\n${unresolvedBlock}\n${indexedBlock}\n\n${sourcesText}${modeHint}`;
 }
