@@ -1,5 +1,4 @@
-import type { CitationSource } from '@/lib/demo-data';
-import { SourceCitations } from './SourceCitations';
+import { SourceCitations, type CitedSource } from './SourceCitations';
 
 interface UserMessageProps {
   text: string;
@@ -20,7 +19,7 @@ export function UserMessage({ text, time }: UserMessageProps) {
 
 interface AssistantMessageProps {
   html: string;
-  sources: CitationSource[];
+  sources: CitedSource[];
   time: string;
   latencyMs: number;
 }
