@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { orchestrate } from '@/lib/agents/orchestrator';
 import { streamSonnet } from '@/lib/llm/anthropic';
 import { MEMO_AGENT_PROMPT } from '@/lib/llm/prompts';
-import { searchChunks, type RetrievedChunk } from '@/lib/retrieval/vector_search';
+import { listIndexedEntities, recentCorpusSnapshot, searchChunks, type RetrievedChunk } from '@/lib/retrieval/vector_search';
 import { ingestEntity } from '@/lib/ingest/pipeline';
 import { getTargetSnapshot } from '@/lib/ingest/persist';
 import type { ResolvedEntity } from '@/lib/lookup/resolve';
@@ -78,15 +78,24 @@ export async function POST(request: NextRequest) {
           await runIngestionWithDeadline(entity, ingestDeadline, emit);
         }
 
-        // 3. Vector search across resolved targets
-        emit({ type: 'retrieving', topK: TOP_K });
+        // 3. Retrieval — vector search when we have a target, recency snapshot otherwise.
         const targetIds = result.resolved.map(e => e.id);
+        const isBroad = targetIds.length === 0;
+        emit({ type: 'retrieving', topK: TOP_K, mode: isBroad ? 'recent' : 'vector' });
         let chunks: RetrievedChunk[] = [];
+        let indexedEntities: Array<{ id: string; name: string; ticker: string | null }> = [];
         try {
-          chunks = await searchChunks(query, {
-            topK: TOP_K,
-            targetIds: targetIds.length > 0 ? targetIds : undefined,
-          });
+          if (isBroad) {
+            // No entity resolved — broad question. Surface the most recent
+            // corpus content + the list of indexed entities so the memo agent
+            // can describe what's available.
+            [chunks, indexedEntities] = await Promise.all([
+              recentCorpusSnapshot({ limit: 12 }),
+              listIndexedEntities(),
+            ]);
+          } else {
+            chunks = await searchChunks(query, { topK: TOP_K, targetIds });
+          }
         } catch (err) {
           emit({ type: 'retrieval_error', error: (err as Error).message });
         }
@@ -108,7 +117,7 @@ export async function POST(request: NextRequest) {
 
         // 5. Synthesize answer (Sonnet stream)
         emit({ type: 'thinking' });
-        const userMessage = buildUserPrompt(query, chunks, result.resolved, result.unresolved);
+        const userMessage = buildUserPrompt(query, chunks, result.resolved, result.unresolved, indexedEntities);
         for await (const ev of streamSonnet({
           systemPrompt: MEMO_AGENT_PROMPT,
           userMessage,
@@ -169,6 +178,7 @@ function buildUserPrompt(
   chunks: RetrievedChunk[],
   resolved: ResolvedEntity[],
   unresolved: Array<{ name: string }>,
+  indexedEntities: Array<{ id: string; name: string; ticker: string | null }>,
 ): string {
   const sourceBlocks = chunks.map((c, idx) => {
     const cite = idx + 1;
@@ -179,14 +189,22 @@ function buildUserPrompt(
 
   const entitiesBlock = resolved.length > 0
     ? `Entities resolved: ${resolved.map(e => `${e.name}${e.ticker ? ` (${e.ticker})` : ''}`).join(', ')}`
-    : 'No entities resolved deterministically.';
+    : 'No specific entity was extracted from this query — treat it as a broad market question.';
   const unresolvedBlock = unresolved.length > 0
     ? `Could not resolve: ${unresolved.map(e => e.name).join(', ')}`
     : '';
 
-  const sourcesText = sourceBlocks.length > 0
-    ? `Retrieved sources (use [N] inline citations, where N is the bracketed number):\n\n${sourceBlocks.join('\n\n---\n\n')}`
-    : 'No sources were retrieved from the corpus for this query. Acknowledge the gap honestly — do not fabricate facts. Suggest what data would need to be ingested.';
+  const indexedBlock = indexedEntities.length > 0
+    ? `Indexed entities currently in the corpus (use these to suggest concrete follow-up queries): ${indexedEntities.map(e => `${e.name}${e.ticker ? ` (${e.ticker})` : ''}`).join(', ')}`
+    : '';
 
-  return `User query: ${query}\n\n${entitiesBlock}\n${unresolvedBlock}\n\n${sourcesText}`;
+  const sourcesText = sourceBlocks.length > 0
+    ? `Retrieved sources (use [N] inline citations matching the bracketed number):\n\n${sourceBlocks.join('\n\n---\n\n')}`
+    : 'No sources were retrieved from the corpus. Acknowledge the gap honestly. Suggest what data would need to be ingested.';
+
+  const broadHint = resolved.length === 0
+    ? '\n\nThis is a broad / market-level query. The retrieved sources are the most-recent items across the entire indexed corpus (not vector-similarity matches). Synthesize what is happening across the named issuers and explicitly point the user toward the indexed entities listed above so they can drill into a specific name.'
+    : '';
+
+  return `User query: ${query}\n\n${entitiesBlock}\n${unresolvedBlock}\n${indexedBlock}\n\n${sourcesText}${broadHint}`;
 }
