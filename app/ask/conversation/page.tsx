@@ -160,8 +160,9 @@ function ConversationView() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let finished = false;
 
-      while (true) {
+      while (!finished) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -172,8 +173,13 @@ function ConversationView() {
           let event: ChatEvent;
           try { event = JSON.parse(line) as ChatEvent; } catch { continue; }
           handleEvent(event);
+          if (event.type === 'done' || event.type === 'error' || event.type === 'clarification_needed') {
+            finished = true;
+            break;
+          }
         }
       }
+      reader.cancel().catch(() => { /* ignore */ });
 
       function handleEvent(event: ChatEvent) {
         const label = activityLabelFor(event);
