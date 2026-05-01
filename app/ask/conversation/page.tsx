@@ -62,12 +62,20 @@ function activityLabelFor(event: ChatEvent): string | null {
   switch (event.type) {
     case 'extracting': return 'Orchestrator · extracting entities';
     case 'extracted': {
+      if (event.entities.length === 0) return null;        // category path will fill in
       const names = event.entities.map(e => e.ticker ?? e.name).join(', ');
-      return event.entities.length > 0
-        ? `Resolved: ${names}`
-        : `Couldn't resolve any entity from the query`;
+      return `Resolved: ${names}`;
     }
-    case 'ingesting': return `Ingesting ${event.entity} (full mode)`;
+    case 'category_detected': return `Category detected: ${event.label}`;
+    case 'category_suggestions':
+      return event.suggestions.length > 0
+        ? `Haiku suggested issuers: ${event.suggestions.join(', ')}`
+        : null;
+    case 'category_resolved': {
+      const names = event.entities.map(e => e.ticker ?? e.name).join(', ');
+      return event.entities.length > 0 ? `Resolved proxies: ${names}` : null;
+    }
+    case 'ingesting': return `Ingesting ${event.entity}`;
     case 'ingest_progress': {
       const nested = event.event;
       if (nested.type === 'fetched') {
@@ -78,13 +86,36 @@ function activityLabelFor(event: ChatEvent): string | null {
       }
       return null;
     }
-    case 'ingest_complete': return `${event.entity} ready`;
-    case 'cache_hit': return `${event.entity} already indexed (${event.documents} docs, ${event.chunks} chunks)`;
-    case 'retrieving': return `Vector search · top ${event.topK}`;
-    case 'retrieved': return `Retrieved ${event.chunkCount} chunks`;
+    case 'ingest_complete': return null;
+    case 'cache_hit': return `${event.entity} cached (${event.documents} docs, ${event.chunks} chunks)`;
+    case 'retrieving': return `${event.mode === 'recent' ? 'Recency' : 'Vector'} search · top ${event.topK}`;
+    case 'retrieved': return null;                         // sources event will summarize
+    case 'sources': {
+      if (event.sources.length === 0) return 'No sources retrieved';
+      const counts = countBySource(event.sources);
+      const parts = Object.entries(counts).map(([k, v]) => `${v} ${k}`);
+      return `Retrieved ${event.sources.length} sources (${parts.join(', ')})`;
+    }
     case 'thinking': return 'Memo Agent · synthesizing answer';
     default: return null;
   }
+}
+
+function countBySource(sources: ChatSource[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of sources) {
+    const label = prettySourceShort(s.source, s.docType);
+    out[label] = (out[label] ?? 0) + 1;
+  }
+  return out;
+}
+
+function prettySourceShort(source: string, docType: string): string {
+  if (source === 'sec_edgar') return docType.includes('xbrl') ? 'XBRL facts' : 'SEC filings';
+  if (source === 'news_rss') return 'news articles';
+  if (source === 'gdelt') return 'GDELT articles';
+  if (source === 'fred') return 'macro series';
+  return source;
 }
 
 interface ExtractedEntity { id: string; name: string; ticker?: string }
@@ -92,6 +123,9 @@ type ChatEvent =
   | { type: 'started'; query: string }
   | { type: 'extracting' }
   | { type: 'extracted'; entities: ExtractedEntity[]; unresolved: { name: string }[]; intent: string; isHistorical: boolean }
+  | { type: 'category_detected'; category: string; label: string }
+  | { type: 'category_suggestions'; suggestions: string[] }
+  | { type: 'category_resolved'; entities: ExtractedEntity[] }
   | { type: 'clarification_needed'; question: string }
   | { type: 'cache_hit'; entity: string; documents: number; chunks: number }
   | { type: 'ingesting'; entity: string }
@@ -99,7 +133,7 @@ type ChatEvent =
   | { type: 'ingest_complete'; entity: string; finalEventType: string }
   | { type: 'ingest_skipped'; entity: string; reason: string }
   | { type: 'ingest_truncated'; entity: string }
-  | { type: 'retrieving'; topK: number }
+  | { type: 'retrieving'; topK: number; mode?: 'vector' | 'recent' }
   | { type: 'retrieved'; chunkCount: number }
   | { type: 'retrieval_error'; error: string }
   | { type: 'sources'; sources: ChatSource[] }

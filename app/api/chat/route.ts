@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { orchestrate } from '@/lib/agents/orchestrator';
-import { detectCategory, type DetectedCategory } from '@/lib/agents/categories';
+import { detectCategory, suggestProxies, type DetectedCategory } from '@/lib/agents/categories';
 import { streamSonnet } from '@/lib/llm/anthropic';
 import { MEMO_AGENT_PROMPT } from '@/lib/llm/prompts';
 import { listIndexedEntities, recentCorpusSnapshot, searchChunks, type RetrievedChunk } from '@/lib/retrieval/vector_search';
@@ -60,22 +60,24 @@ export async function POST(request: NextRequest) {
           emit({ type: 'clarification_suppressed', question: result.clarificationQuestion });
         }
 
-        // 1a. Category fallback: deterministic match for ECM/DCM/munis/PE/etc.
-        // expands to a small proxy entity set that goes through the same
-        // resolve → ingest → retrieve pipeline.
+        // 1a. Category fallback: when the user asks a category-level question
+        // ("what's new in ECM"), Haiku picks 3-4 representative issuers
+        // grounded in the live query. No static company list.
         let category: DetectedCategory | null = null;
         if (result.resolved.length === 0) {
           category = detectCategory(query);
           if (category) {
             emit({ type: 'category_detected', category: category.category, label: category.label });
-            for (const proxy of category.proxies) {
-              const resolved = await resolveEntity(proxy.query);
+            const proxies = await suggestProxies(query, category);
+            emit({ type: 'category_suggestions', suggestions: proxies });
+            for (const proxy of proxies) {
+              const resolved = await resolveEntity(proxy);
               if (resolved && !result.resolved.some(r => r.id === resolved.id)) {
                 result.resolved.push(resolved);
               }
             }
             emit({
-              type: 'category_proxies',
+              type: 'category_resolved',
               entities: result.resolved.map(e => ({ id: e.id, name: e.name, ticker: e.ticker })),
             });
           }
