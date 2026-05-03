@@ -83,7 +83,21 @@ export interface LBOResult {
   };
 }
 
+export class LBOComputeError extends Error {
+  constructor(public field: string, message: string) {
+    super(message);
+    this.name = 'LBOComputeError';
+  }
+}
+
 export function runLBO(inputs: LBOInputs): LBOResult {
+  // Guard every input — no NaN allowed. The validators should catch these
+  // upstream; throwing here is a defensive belt-and-suspenders.
+  for (const [key, val] of Object.entries(inputs)) {
+    if (!Number.isFinite(val as number)) {
+      throw new LBOComputeError(key, `LBO input ${key}=${String(val)} is not a finite number.`);
+    }
+  }
   const sourcesUses = computeSourcesUses(inputs);
   const schedule = buildSchedule(inputs);
   const exit = computeExit(inputs, schedule);
@@ -168,14 +182,23 @@ function computeExit(inputs: LBOInputs, schedule: AnnualRow[]): ExitSummary {
 function computeReturns(sourcesUses: SourcesUses, exit: ExitSummary, holdYears: number): ReturnsSummary {
   const initialEquity = sourcesUses.equity;
   const exitEquity = exit.equityProceeds;
+  if (!Number.isFinite(initialEquity) || initialEquity <= 0) {
+    // Pathological case — entry implies negative or zero equity. Surface a
+    // -100% IRR and 0x MOIC instead of NaN so the renderer shows real
+    // numbers; the entry-multiple guard upstream should already block this.
+    return { initialEquity, exitEquity, irrPct: -1, moic: 0, cashOnCash: 0 };
+  }
   const moic = exitEquity / initialEquity;
-  const irr = moic > 0 ? Math.pow(moic, 1 / holdYears) - 1 : -1;
+  let irr: number;
+  if (!Number.isFinite(moic) || moic <= 0) irr = -1;
+  else if (holdYears <= 0) irr = 0;
+  else irr = Math.pow(moic, 1 / holdYears) - 1;
   return {
     initialEquity,
-    exitEquity,
-    irrPct: irr,
-    moic,
-    cashOnCash: moic,
+    exitEquity: Number.isFinite(exitEquity) ? exitEquity : 0,
+    irrPct: Number.isFinite(irr) ? irr : -1,
+    moic: Number.isFinite(moic) ? moic : 0,
+    cashOnCash: Number.isFinite(moic) ? moic : 0,
   };
 }
 

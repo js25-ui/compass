@@ -139,6 +139,24 @@ CREATE INDEX IF NOT EXISTS idx_tasks_target  ON tasks(target_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_stage   ON tasks(stage);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
 
+-- Financial facts cache: parsed XBRL values keyed by target + metric + period.
+-- Models pull from this table for fast retrieval; XBRL only re-parsed when a
+-- required (target, metric, period) is missing. Hot path for LBO / IPO / bond.
+CREATE TABLE IF NOT EXISTS financial_facts (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_id         TEXT REFERENCES targets(id) ON DELETE CASCADE,
+  metric            TEXT NOT NULL,            -- 'revenue' | 'ebitda' | 'capex' | 'long_term_debt' | etc.
+  value             NUMERIC,
+  period            TEXT,                     -- 'LTM' | 'FY2024' | 'Q1_2026' | 'TTM_2026Q1'
+  source_filing_id  TEXT,                     -- accession number or document_id
+  filed_at          TIMESTAMPTZ,
+  retrieved_at      TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (target_id, metric, period)
+);
+
+CREATE INDEX IF NOT EXISTS idx_facts_target_metric ON financial_facts(target_id, metric);
+CREATE INDEX IF NOT EXISTS idx_facts_target        ON financial_facts(target_id);
+
 -- Generated documents (IC memos, pitch decks)
 CREATE TABLE IF NOT EXISTS generated_documents (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -182,3 +200,4 @@ ALTER TABLE ingest_cursors DISABLE ROW LEVEL SECURITY;
 ALTER TABLE eval_runs      DISABLE ROW LEVEL SECURITY;
 ALTER TABLE generated_documents DISABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks               DISABLE ROW LEVEL SECURITY;
+ALTER TABLE financial_facts     DISABLE ROW LEVEL SECURITY;
