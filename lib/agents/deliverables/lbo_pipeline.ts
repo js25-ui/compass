@@ -158,19 +158,27 @@ interface EstimateOutput {
 }
 
 async function estimateFinancials(displayName: string): Promise<FinancialProfile | null> {
-  const systemPrompt = `You estimate a base-year financial profile for an LBO model when no SEC filings are available.
+  const systemPrompt = `You estimate a base-year financial profile for an LBO model when SEC filings are not available.
 
 Output STRICT JSON only:
 {
-  "revenue_m": <approximate latest-fiscal-year revenue in $M>,
+  "revenue_m": <most-recent annual revenue or run-rate in $M, latest year you have knowledge of>,
   "ebitda_margin": <decimal, e.g. 0.25 for 25%>,
-  "rationale": "<one sentence explaining the basis — public reports, comps, etc.>"
+  "rationale": "<one short sentence: source year + basis, e.g. '2024 ARR ~$1.9B per March 2025 IPO prospectus'>"
 }
 
 Rules:
-- Use your training knowledge to ground these numbers. Be conservative.
+- Use the MOST RECENT figure your training data supports. For private companies that IPO'd or filed recently, use IPO-prospectus or post-IPO numbers.
+- For high-growth AI/infrastructure companies, run-rate is appropriate even if annual GAAP revenue is lower.
 - If you genuinely don't recognize the entity, return revenue_m=0.
-- ebitda_margin between 0.05 and 0.55. Tech infrastructure typically 0.20-0.35; mature software 0.30-0.45; commodity/industrial 0.10-0.20.`;
+- ebitda_margin guidance:
+    GPU/cloud infrastructure (CoreWeave, hyperscaler-adjacent): 0.20-0.35 once at scale, lower if early
+    SaaS at scale: 0.25-0.40
+    Mature software: 0.30-0.45
+    Restaurants / consumer: 0.10-0.20
+    Industrial / commodity: 0.10-0.18
+    Banks / financial services: 0.30-0.45
+- Be specific in rationale — name the year and source basis if you can.`;
 
   try {
     const raw = await haikuComplete({ systemPrompt, userMessage: displayName, maxTokens: 200 });
@@ -233,6 +241,14 @@ function renderLBOHtml(targetName: string, profile: FinancialProfile, r: LBOResu
 
   const headline = `<p><strong>${escape(targetName)} LBO · ${formatMillions(ins.entryEV)} entry EV · ${formatMultiple(ins.leverageMultiple)} leverage · ${ins.holdPeriod}Y hold</strong></p>`;
 
+  // Sanity check: when entry EV implies an entry multiple > 30x EBITDA, the
+  // numbers are usually math-correct but practically unbelievable — flag it.
+  const initialEBITDA = ins.initialRevenue * ins.ebitdaMargin;
+  const impliedEntryMultiple = initialEBITDA > 0 ? ins.entryEV / initialEBITDA : Infinity;
+  const sanityWarning = impliedEntryMultiple > 30
+    ? `<p class="memo-data-note" style="border-left-color:#fbbf24"><strong>Heads up:</strong> Entry EV (${formatMillions(ins.entryEV)}) implies <strong>${impliedEntryMultiple.toFixed(0)}x base-year EBITDA</strong>, which is well above typical LBO entry ranges (8-15x). Either the entry EV is too high for the base-year financials below, or the base-year revenue/margin understates run-rate. Consider revising one or both.</p>`
+    : '';
+
   const verdict = ret.irrPct >= 0.20
     ? `Returns clear a 20% IRR hurdle: <strong>${formatPct(ret.irrPct)} IRR / ${ret.moic.toFixed(1)}x MOIC</strong>.`
     : ret.irrPct >= 0.15
@@ -243,6 +259,7 @@ function renderLBOHtml(targetName: string, profile: FinancialProfile, r: LBOResu
     headline,
     `<p>${verdict}</p>`,
     profileNote,
+    sanityWarning,
 
     `<h3 class="memo-h3">Sources &amp; Uses</h3>`,
     `<table class="memo-table">
