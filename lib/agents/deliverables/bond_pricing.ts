@@ -16,6 +16,8 @@ import {
   sonnetJson,
   table,
 } from './shared';
+import { BOND_MANIFEST } from '@/lib/models/manifests';
+import { preflight } from '@/lib/data/preflight';
 
 export interface BondPricingScope {
   tenor_years?: number;
@@ -128,7 +130,23 @@ export async function* runBondPricingPipeline(opts: {
   detectedTarget?: { name: string; ticker?: string } | null;
 }): AsyncGenerator<DeliverableEvent, void> {
   const target = opts.detectedTarget?.name ?? opts.query;
-  yield { type: 'progress', step: `Pulling comp set for ${target} ${opts.scope.tenor_years ?? 10}Y…` };
+  yield { type: 'progress', step: `Pre-flight: checking ${target} credit profile…` };
+
+  const pre = await preflight({
+    query: opts.query,
+    detectedTarget: opts.detectedTarget,
+    manifest: BOND_MANIFEST,
+  });
+  if (!pre.ok) {
+    // Sovereigns / supras don't have SEC filings but ARE valid bond issuers.
+    // For now we still refuse on missing financials — same honest-failure
+    // pattern as LBO, with a sovereign/muni-specific path coming later.
+    yield { type: 'token', text: renderBondPreflightFailureHtml(target, pre.detail, pre.missingMetrics, pre.attempted) };
+    yield { type: 'done' };
+    return;
+  }
+
+  const realCreditNote = `\nReal financials from XBRL: revenue $${pre.scalar.revenue.toFixed(0)}M, operating income $${(pre.scalar.operating_income ?? 0).toFixed(0)}M${pre.scalar.long_term_debt ? `, long-term debt $${pre.scalar.long_term_debt.toFixed(0)}M` : ''}.`;
 
   const userMessage = `Issuer: ${target}${opts.detectedTarget?.ticker ? ` (${opts.detectedTarget.ticker})` : ''}
 Tenor: ${opts.scope.tenor_years ?? 10} years
@@ -136,7 +154,7 @@ Proposed size: $${opts.scope.issue_size_m ?? 1000}M
 Comp window: ${opts.scope.comp_window_months ?? 12} months
 Rating override: ${opts.scope.rating ?? 'use issuer current'}
 Use of proceeds: ${opts.scope.use_of_proceeds ?? 'general corporate purposes'}
-Original ask: ${opts.query}`;
+Original ask: ${opts.query}${realCreditNote}`;
 
   yield { type: 'progress', step: 'Anchoring spread vs. comp set + running rate scenarios…' };
 
@@ -151,6 +169,25 @@ Original ask: ${opts.query}`;
   yield { type: 'progress', step: 'Rendering deliverable…' };
   yield { type: 'token', text: renderBondPricingHtml(target, parsed) };
   yield { type: 'done' };
+}
+
+function renderBondPreflightFailureHtml(target: string, detail: string, missing: string[], attempted: string[]): string {
+  return [
+    `<div class="memo-rec-banner" style="border-left-color:#fbbf24">
+       <div class="memo-rec-label" style="color:#fbbf24">CANNOT RUN BOND PRICING</div>
+       <div class="memo-rec-headline">${escape(target)}: required issuer financials not available</div>
+     </div>`,
+    `<p>${escape(detail)}</p>`,
+    missing.length > 0 ? `<p><strong>Missing required data:</strong> ${missing.map(m => `<code>${escape(m)}</code>`).join(', ')}.</p>` : '',
+    `<p><strong>Options:</strong></p>
+     <ul class="memo-bullets">
+       <li>→ For a public corporate issuer with SEC filings, double-check the entity name (try the ticker).</li>
+       <li>→ Sovereigns / supras / munis don't appear in SEC XBRL — sovereign bond pricing pipeline coming next.</li>
+       <li>→ Provide issuer revenue and operating income manually if you have them off-platform.</li>
+     </ul>`,
+    `<p class="memo-disclaimer">Sources attempted: ${attempted.join(' → ')}.</p>`,
+    `<p class="memo-disclaimer">Compass refuses to fabricate issuer credit metrics. Spread recommendation needs real numbers to be defensible.</p>`,
+  ].join('\n');
 }
 
 function renderBondPricingHtml(targetName: string, out: SonnetOut): string {

@@ -176,8 +176,10 @@ function normalizePercent(v: number): number {
 }
 
 function extractEntryEVFromQuery(q: string): number | null {
+  const tMatch = q.match(/\$\s*([\d.]+)\s*T(?:r|rillion)?\b/i);
+  if (tMatch) return Math.round(parseFloat(tMatch[1]) * 1_000_000);     // $T → $M
   const bMatch = q.match(/\$\s*([\d.]+)\s*B(?:n|illion)?\b/i);
-  if (bMatch) return Math.round(parseFloat(bMatch[1]) * 1000);
+  if (bMatch) return Math.round(parseFloat(bMatch[1]) * 1000);          // $B → $M
   const mMatch = q.match(/\$\s*([\d,.]+)\s*M(?:M|illion)?\b/i);
   if (mMatch) return Math.round(parseFloat(mMatch[1].replace(/,/g, '')));
   return null;

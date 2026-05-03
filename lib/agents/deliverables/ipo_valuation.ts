@@ -17,6 +17,8 @@ import {
   sonnetJson,
   table,
 } from './shared';
+import { IPO_MANIFEST } from '@/lib/models/manifests';
+import { preflight } from '@/lib/data/preflight';
 
 export interface IPOValuationScope {
   num_peers?: number;
@@ -146,13 +148,29 @@ export async function* runIPOValuationPipeline(opts: {
   detectedTarget?: { name: string; ticker?: string } | null;
 }): AsyncGenerator<DeliverableEvent, void> {
   const target = opts.detectedTarget?.name ?? opts.query;
-  yield { type: 'progress', step: `Selecting peer set for ${target} IPO…` };
+  yield { type: 'progress', step: `Pre-flight: checking ${target} financial history…` };
+
+  const pre = await preflight({
+    query: opts.query,
+    detectedTarget: opts.detectedTarget,
+    manifest: IPO_MANIFEST,
+  });
+  if (!pre.ok) {
+    yield { type: 'token', text: renderIPOPreflightFailureHtml(target, pre.detail, pre.missingMetrics, pre.attempted) };
+    yield { type: 'done' };
+    return;
+  }
+
+  const revHistory = pre.history.revenue ?? [];
+  const realFinancials = revHistory.length > 0
+    ? `\nReal revenue history from XBRL: ${revHistory.map(f => `${f.period}: $${f.value?.toFixed(0)}M`).join(', ')}.`
+    : '';
 
   const userMessage = `Target: ${target}${opts.detectedTarget?.ticker ? ` (proposed ticker ${opts.detectedTarget.ticker})` : ''}
 Number of peers: ${opts.scope.num_peers ?? 8}
 Precedent window (months): ${opts.scope.precedent_window_months ?? 18}
 Pricing anchor: ${opts.scope.pricing_anchor ?? 'mixed'}
-Original ask: ${opts.query}`;
+Original ask: ${opts.query}${realFinancials}`;
 
   yield { type: 'progress', step: 'Building valuation matrix and Day-1 distribution…' };
 
@@ -167,6 +185,25 @@ Original ask: ${opts.query}`;
   yield { type: 'progress', step: 'Rendering deliverable…' };
   yield { type: 'token', text: renderIPOValuationHtml(target, parsed) };
   yield { type: 'done' };
+}
+
+function renderIPOPreflightFailureHtml(target: string, detail: string, missing: string[], attempted: string[]): string {
+  return [
+    `<div class="memo-rec-banner" style="border-left-color:#fbbf24">
+       <div class="memo-rec-label" style="color:#fbbf24">CANNOT RUN IPO VALUATION</div>
+       <div class="memo-rec-headline">${escape(target)}: required revenue history not available</div>
+     </div>`,
+    `<p>${escape(detail)}</p>`,
+    missing.length > 0 ? `<p><strong>Missing required data:</strong> ${missing.map(m => `<code>${escape(m)}</code>`).join(', ')}.</p>` : '',
+    `<p><strong>Options:</strong></p>
+     <ul class="memo-bullets">
+       <li>→ For a private pre-IPO company, provide expected revenue (current fiscal year and forward) manually.</li>
+       <li>→ For a recently-public company, ensure the target has at least one fiscal year of 10-K filings.</li>
+       <li>→ Use Trading Comps instead — comp-based valuation works without target-specific filings.</li>
+     </ul>`,
+    `<p class="memo-disclaimer">Sources attempted: ${attempted.join(' → ')}.</p>`,
+    `<p class="memo-disclaimer">Compass refuses to fabricate target revenue / margin / shares-outstanding for an IPO valuation. The output would look credible but the implied range would be made up.</p>`,
+  ].join('\n');
 }
 
 function renderIPOValuationHtml(targetName: string, out: SonnetOut): string {
