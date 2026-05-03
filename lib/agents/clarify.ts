@@ -174,7 +174,87 @@ export async function clarifyScope(query: string): Promise<ClarifyOutput> {
     .filter(b => b.type === 'text')
     .map(b => (b as { type: 'text'; text: string }).text)
     .join('');
-  return parseClarifyOutput(text);
+  const parsed = parseClarifyOutput(text);
+  return enforceMandatoryQuestions(parsed, query);
+}
+
+/**
+ * Belt-and-suspenders: even when the prompt declares mandatory questions,
+ * Sonnet sometimes drops one (typically when the query already mentions the
+ * value). This post-processing layer guarantees the canonical set is present
+ * for every task type. Existing Sonnet questions are kept verbatim; missing
+ * ones are appended with sensible defaults.
+ */
+function enforceMandatoryQuestions(out: ClarifyOutput, query: string): ClarifyOutput {
+  if (out.task_type === 'chat_answer' || out.ready_to_proceed) return out;
+
+  const required = REQUIRED_QUESTIONS[out.task_type];
+  if (!required) return out;
+
+  const existing = new Set(out.questions.map(q => q.id));
+  const additions: ClarifyQuestion[] = [];
+  for (const r of required) {
+    if (existing.has(r.id)) continue;
+    additions.push(r.build(query));
+  }
+  if (additions.length > 0) {
+    return {
+      ...out,
+      questions: [...additions, ...out.questions],     // prepend so required show up first
+      ready_to_proceed: false,
+    };
+  }
+  return out;
+}
+
+interface RequiredQuestionSpec {
+  id: string;
+  build: (query: string) => ClarifyQuestion;
+}
+
+const REQUIRED_QUESTIONS: Partial<Record<TaskType, RequiredQuestionSpec[]>> = {
+  lbo_analysis: [
+    {
+      id: 'entry_ev',
+      build: query => ({
+        id: 'entry_ev',
+        prompt: 'Entry enterprise value — what level are we modeling against?',
+        kind: 'numeric',
+        default: extractDollarsFromQueryToM(query) ?? 1000,
+        unit: '$M',
+        min: 50,
+        max: 5_000_000,
+        step: 25,
+        hint: 'Enter $M (e.g. 1200 for $1.2B, 50000 for $50B). Recommended only — not a cap.',
+      }),
+    },
+    {
+      id: 'hold_period',
+      build: () => ({ id: 'hold_period', prompt: 'Hold period — how long is the sponsor underwriting?', kind: 'numeric', default: 5, unit: 'years', min: 1, max: 12, step: 1, hint: 'PE-typical 5y; infra / continuation funds run longer.' }),
+    },
+    {
+      id: 'leverage_multiple',
+      build: () => ({ id: 'leverage_multiple', prompt: 'Leverage — turns of EBITDA on day one?', kind: 'numeric', default: 5.5, unit: 'x EBITDA', min: 2, max: 12, step: 0.25, hint: 'Sponsor LBO band 4-7x; ABL / asset-heavy plays go higher.' }),
+    },
+    {
+      id: 'revenue_cagr',
+      build: () => ({ id: 'revenue_cagr', prompt: 'Revenue CAGR over the hold — how do you want to model growth?', kind: 'numeric', default: 12, unit: '%', min: -10, max: 60, step: 1, hint: 'Mature consumer ~5%, growth tech 20-35%, hyper-growth higher.' }),
+    },
+    {
+      id: 'exit_multiple',
+      build: () => ({ id: 'exit_multiple', prompt: 'Exit multiple — what trading multiple do we underwrite at exit?', kind: 'numeric', default: 11.0, unit: 'x EBITDA', min: 5, max: 35, step: 0.5, hint: 'Premium consumer brands hit 20x+; commodity industrials under 8x. Recommendation only.' }),
+    },
+  ],
+};
+
+function extractDollarsFromQueryToM(q: string): number | null {
+  const tMatch = q.match(/\$\s*([\d.]+)\s*T(?:r|rillion)?\b/i);
+  if (tMatch) return Math.round(parseFloat(tMatch[1]) * 1_000_000);
+  const bMatch = q.match(/\$\s*([\d.]+)\s*B(?:n|illion)?\b/i);
+  if (bMatch) return Math.round(parseFloat(bMatch[1]) * 1000);
+  const mMatch = q.match(/\$\s*([\d,.]+)\s*M(?:M|illion)?\b/i);
+  if (mMatch) return Math.round(parseFloat(mMatch[1].replace(/,/g, '')));
+  return null;
 }
 
 function parseClarifyOutput(raw: string): ClarifyOutput {
