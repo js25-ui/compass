@@ -13,10 +13,12 @@ import {
   fmtMultiple,
   fmtPctRaw,
   note,
+  refusalCard,
   section,
   sonnetJson,
   table,
 } from './shared';
+import { lightPreflight } from '@/lib/data/preflight';
 
 export interface TradingCompsScope {
   num_comps?: number;
@@ -116,13 +118,38 @@ export async function* runTradingCompsPipeline(opts: {
 }): AsyncGenerator<DeliverableEvent, void> {
   const target = opts.detectedTarget?.name ?? opts.query;
 
-  yield { type: 'progress', step: `Selecting peer set for ${target}…` };
+  yield { type: 'progress', step: `Pre-flight: resolving ${target}…` };
+  const pre = await lightPreflight({ query: opts.query, detectedTarget: opts.detectedTarget });
+  if (!pre.ok) {
+    yield {
+      type: 'token',
+      text: refusalCard({
+        deliverableLabel: 'TRADING COMPS',
+        target,
+        headline: 'target not found',
+        detail: pre.detail,
+        options: [
+          'Try a public-company ticker or full name (e.g. "Snowflake", "SNOW").',
+          'For a sector-level read without a specific anchor, ask "what\'s new in [sector]" instead.',
+        ],
+      }),
+    };
+    yield { type: 'done' };
+    return;
+  }
+
+  yield { type: 'progress', step: `Selecting peer set for ${pre.entity.name}…` };
 
   const numComps = opts.scope.num_comps ?? 8;
   const scope = opts.scope.comp_universe_scope ?? 'sector_plus';
   const metrics = Array.isArray(opts.scope.metrics_focus) ? opts.scope.metrics_focus.join(', ') : 'valuation, growth, profitability';
 
-  const userMessage = `Target: ${target}${opts.detectedTarget?.ticker ? ` (${opts.detectedTarget.ticker})` : ''}
+  const filingsNote = pre.hasFilings
+    ? `${pre.entity.name} is an SEC filer (CIK ${pre.entity.cik}); cite filings only when supported.`
+    : `${pre.entity.name} is NOT an SEC filer (private / sovereign / muni). Do NOT reference 10-K / 10-Q numbers — only public commentary, prospectus filings, or news. Mark target multiples as estimates.`;
+
+  const userMessage = `Target: ${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}
+${filingsNote}
 Number of peers: ${numComps}
 Comp universe scope: ${scope}
 Metric emphasis: ${metrics}

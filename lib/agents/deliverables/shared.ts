@@ -116,3 +116,32 @@ export interface DeliverableEvent {
   sources?: Array<{ n: number; title: string; url: string | null; meta: string }>;
   error?: string;
 }
+
+/** Standard refusal banner used by every deliverable that pre-flights. */
+export function refusalCard(opts: {
+  deliverableLabel: string;          // e.g. "TRADING COMPS"
+  target: string;
+  headline: string;                  // short failure reason in bold banner
+  detail: string;                    // 1-2 sentence explanation
+  options?: string[];                // bullet list of revise/retry suggestions
+  attempted?: string[];              // sources we tried, optional
+  bannerColor?: 'amber' | 'red';
+}): string {
+  const color = opts.bannerColor === 'red' ? '#f87171' : '#fbbf24';
+  const optionsHtml = opts.options && opts.options.length > 0
+    ? `<p><strong>Options:</strong></p><ul class="memo-bullets">${opts.options.map(o => `<li>→ ${escape(o)}</li>`).join('')}</ul>`
+    : '';
+  const attemptedHtml = opts.attempted && opts.attempted.length > 0
+    ? `<p class="memo-disclaimer">Sources attempted: ${opts.attempted.join(' → ')}.</p>`
+    : '';
+  return [
+    `<div class="memo-rec-banner" style="border-left-color:${color}">
+       <div class="memo-rec-label" style="color:${color}">CANNOT RUN ${escape(opts.deliverableLabel)}</div>
+       <div class="memo-rec-headline">${escape(opts.target)}: ${escape(opts.headline)}</div>
+     </div>`,
+    `<p>${escape(opts.detail)}</p>`,
+    optionsHtml,
+    attemptedHtml,
+    `<p class="memo-disclaimer">Compass refuses to fabricate. The output would look credible but the numbers and entities would be made up.</p>`,
+  ].join('\n');
+}

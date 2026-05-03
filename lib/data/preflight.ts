@@ -148,3 +148,62 @@ export function scalarOrNull(result: PreflightSuccess, metric: FactMetric): numb
   const v = result.scalar[metric];
   return Number.isFinite(v) ? v : null;
 }
+
+/**
+ * Lightweight pre-flight for LLM-driven deliverables (Trading Comps,
+ * Precedents, IC Memo, Pitch Book). Doesn't require full XBRL — only
+ * verifies the target resolves to a known entity. Returns `hasFilings` so
+ * the pipeline can pass that signal into the Sonnet prompt and prevent
+ * the model from referencing filings that don't exist for private cos.
+ */
+export interface LightPreflightOk {
+  ok: true;
+  entity: ResolvedEntity;
+  hasFilings: boolean;
+  hasIndexedCorpus: boolean;
+}
+
+export interface LightPreflightFail {
+  ok: false;
+  reason: 'unresolved';
+  detail: string;
+  query: string;
+}
+
+export type LightPreflightResult = LightPreflightOk | LightPreflightFail;
+
+export async function lightPreflight(opts: {
+  query: string;
+  detectedTarget?: { name: string; ticker?: string } | null;
+  /** When true, also checks the indexed corpus for chunks tied to the target. */
+  requireIndexedCorpus?: boolean;
+}): Promise<LightPreflightResult> {
+  const targetQuery = opts.detectedTarget?.name ?? opts.query;
+  const entity = await resolveEntity(targetQuery);
+  if (!entity) {
+    return {
+      ok: false,
+      reason: 'unresolved',
+      query: targetQuery,
+      detail: `Couldn't resolve "${targetQuery}" to a known entity. The deliverable would invent a target — refusing to run.`,
+    };
+  }
+  const hasFilings = Boolean(entity.cik);
+
+  let hasIndexedCorpus = false;
+  if (opts.requireIndexedCorpus) {
+    // Cheap presence check via documents table.
+    try {
+      const sb = (await import('@/lib/db/client')).getSupabaseService();
+      const { count } = await sb
+        .from('documents')
+        .select('id', { count: 'exact', head: true })
+        .eq('target_id', entity.id);
+      hasIndexedCorpus = (count ?? 0) > 0;
+    } catch {
+      hasIndexedCorpus = false;
+    }
+  }
+
+  return { ok: true, entity, hasFilings, hasIndexedCorpus };
+}

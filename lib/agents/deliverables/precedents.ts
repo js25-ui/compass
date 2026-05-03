@@ -12,10 +12,12 @@ import {
   fmtMultiple,
   fmtPctRaw,
   note,
+  refusalCard,
   section,
   sonnetJson,
   table,
 } from './shared';
+import { lightPreflight } from '@/lib/data/preflight';
 
 export interface PrecedentsScope {
   num_precedents?: number;
@@ -92,9 +94,29 @@ export async function* runPrecedentsPipeline(opts: {
   detectedTarget?: { name: string; ticker?: string } | null;
 }): AsyncGenerator<DeliverableEvent, void> {
   const target = opts.detectedTarget?.name ?? opts.query;
-  yield { type: 'progress', step: `Scanning precedents for ${target}…` };
+  yield { type: 'progress', step: `Pre-flight: resolving ${target}…` };
+  const pre = await lightPreflight({ query: opts.query, detectedTarget: opts.detectedTarget });
+  if (!pre.ok) {
+    yield {
+      type: 'token',
+      text: refusalCard({
+        deliverableLabel: 'PRECEDENT TRANSACTIONS',
+        target,
+        headline: 'target not found',
+        detail: pre.detail,
+        options: [
+          'Provide a known company name or ticker.',
+          'For a sector-level deal scan without a specific anchor, ask "recent M&A in [sector]" via chat instead.',
+        ],
+      }),
+    };
+    yield { type: 'done' };
+    return;
+  }
 
-  const userMessage = `Target: ${target}
+  yield { type: 'progress', step: `Scanning precedents for ${pre.entity.name}…` };
+
+  const userMessage = `Target: ${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}
 Number of precedents: ${opts.scope.num_precedents ?? 6}
 Window (months): ${opts.scope.precedent_window_months ?? 60}
 Minimum deal size: $${opts.scope.deal_size_min_m ?? 500}M

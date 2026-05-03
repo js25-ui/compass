@@ -7,6 +7,7 @@
  */
 
 import { runLBO, type LBOInputs } from '@/lib/models/lbo';
+import { lightPreflight } from '@/lib/data/preflight';
 import {
   type DeliverableEvent,
   escape,
@@ -15,6 +16,7 @@ import {
   fmtPct,
   fmtPctRaw,
   note,
+  refusalCard,
   section,
   sonnetJson,
   table,
@@ -90,12 +92,34 @@ export async function* runPitchBookPipeline(opts: {
   const focus = opts.scope.pitch_focus ?? 'strategic_overview';
   const includeLBO = opts.scope.include_lbo ?? true;
 
-  yield { type: 'progress', step: `Assembling pitch book for ${target} (${focus.replace(/_/g, ' ')})…` };
+  yield { type: 'progress', step: `Pre-flight: resolving ${target}…` };
+  const pre = await lightPreflight({ query: opts.query, detectedTarget: opts.detectedTarget });
+  if (!pre.ok) {
+    yield {
+      type: 'token',
+      text: refusalCard({
+        deliverableLabel: 'PITCH BOOK',
+        target,
+        headline: 'target not found',
+        detail: pre.detail,
+        options: [
+          'Provide a known company name or ticker.',
+          'For a sector pitch without a specific target, ask "what\'s new in [sector]" via chat.',
+        ],
+      }),
+    };
+    yield { type: 'done' };
+    return;
+  }
+
+  const resolvedName = pre.entity.name;
+
+  yield { type: 'progress', step: `Assembling pitch book for ${resolvedName} (${focus.replace(/_/g, ' ')})…` };
 
   yield { type: 'progress', step: 'Section 1/5 · Executive summary + thesis…' };
   let exec: ExecAndRecOut | null = null;
   try {
-    exec = await genExecAndRec(target, focus, opts.query);
+    exec = await genExecAndRec(resolvedName, focus, opts.query);
   } catch (err) {
     yield { type: 'error', error: `Exec summary generation failed: ${err instanceof Error ? err.message : 'unknown'}` };
     return;
@@ -129,7 +153,7 @@ export async function* runPitchBookPipeline(opts: {
   let lboHtml = '';
   if (includeLBO) {
     yield { type: 'progress', step: 'Section 4/5 · LBO scenario (sponsor lens)…' };
-    lboHtml = renderLBOScenario(target, exec.key_metrics);
+    lboHtml = renderLBOScenario(resolvedName, exec.key_metrics);
   }
 
   yield { type: 'progress', step: 'Section 5/5 · Recommended action…' };
@@ -138,7 +162,7 @@ export async function* runPitchBookPipeline(opts: {
   yield {
     type: 'token',
     text: renderPitchBookHtml({
-      target,
+      target: resolvedName,
       focus,
       exec,
       compsHtml: compsResult.html || '<p><em>Trading comps section failed to generate.</em></p>',

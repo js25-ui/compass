@@ -8,11 +8,12 @@
  */
 
 import { searchChunks } from '@/lib/retrieval/vector_search';
-import { resolveEntity } from '@/lib/lookup/resolve';
+import { lightPreflight } from '@/lib/data/preflight';
 import {
   type DeliverableEvent,
   escape,
   note,
+  refusalCard,
   section,
   sonnetJson,
   table,
@@ -179,19 +180,60 @@ export async function* runICMemoPipeline(opts: {
   detectedTarget?: { name: string; ticker?: string } | null;
 }): AsyncGenerator<DeliverableEvent, void> {
   const target = opts.detectedTarget?.name ?? opts.query;
-  yield { type: 'progress', step: `Resolving target ${target}…` };
+  yield { type: 'progress', step: `Pre-flight: resolving ${target}…` };
 
-  const resolved = await resolveEntity(target);
-  const targetName = resolved?.name ?? target;
+  const pre = await lightPreflight({
+    query: opts.query,
+    detectedTarget: opts.detectedTarget,
+    requireIndexedCorpus: true,
+  });
+  if (!pre.ok) {
+    yield {
+      type: 'token',
+      text: refusalCard({
+        deliverableLabel: 'IC MEMO',
+        target,
+        headline: 'target not found',
+        detail: pre.detail,
+        options: [
+          'Provide a known company name or ticker.',
+          'IC memos require a target whose corpus is indexed — every claim must cite a real source.',
+        ],
+      }),
+    };
+    yield { type: 'done' };
+    return;
+  }
+
+  const targetName = pre.entity.name;
   const dealType = inferDealType(opts.query, opts.scope);
 
-  yield { type: 'progress', step: 'Pulling indexed sources from corpus…' };
+  if (!pre.hasIndexedCorpus) {
+    yield {
+      type: 'token',
+      text: refusalCard({
+        deliverableLabel: 'IC MEMO',
+        target: targetName,
+        headline: 'no indexed corpus',
+        detail: `No SEC filings, news, or other documents are indexed for ${targetName} yet. An IC memo without grounded citations would violate Compass's no-fabrication rule.`,
+        options: [
+          `Ask about ${targetName} in chat first — Compass auto-ingests on demand (~10-25s for public filers).`,
+          'Then re-run "IC memo for [target]" against the now-indexed corpus.',
+        ],
+        attempted: ['entity_resolution', 'documents_count_check'],
+      }),
+    };
+    yield { type: 'done' };
+    return;
+  }
+
+  yield { type: 'progress', step: `Pulling indexed sources from corpus…` };
 
   let chunks: ChunkContext[] = [];
   try {
     const retrieved = await searchChunks(opts.query, {
       topK: 12,
-      targetIds: resolved ? [resolved.id] : undefined,
+      targetIds: [pre.entity.id],
     });
     chunks = retrieved.map((c, i) => ({
       n: i + 1,
@@ -207,15 +249,20 @@ export async function* runICMemoPipeline(opts: {
   }
 
   if (chunks.length === 0) {
+    // Corpus has documents but vector search returned 0 — embeddings missing or zeros.
     yield {
       type: 'token',
-      text: [
-        `<p><strong>${escape(targetName)} IC Memo</strong></p>`,
-        note(
-          `<strong>Note:</strong> No indexed sources are available for ${escape(targetName)} yet. Drafting an IC memo without grounded citations would violate Compass's no-fabrication rule. Try ingesting the entity first (search for it in the chat — Compass auto-ingests on demand) and then re-run this memo request.`,
-          'warn',
-        ),
-      ].join(''),
+      text: refusalCard({
+        deliverableLabel: 'IC MEMO',
+        target: targetName,
+        headline: 'no relevant chunks',
+        detail: `${targetName} has indexed documents but vector search returned no relevant chunks for "${opts.query}". The corpus may have been ingested in numerical mode (no embeddings) or the query is too narrow.`,
+        options: [
+          'Try a broader phrasing of the memo prompt.',
+          'Re-ingest the entity in full mode via /api/ingest/[entity]?mode=full.',
+        ],
+        attempted: ['entity_resolution', 'documents_count_check', 'vector_search_match_chunks'],
+      }),
     };
     yield { type: 'done' };
     return;
