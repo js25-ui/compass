@@ -1,0 +1,80 @@
+import type { TaskManifest } from './types';
+
+export const PITCH_BOOK_MANIFEST: TaskManifest = {
+  taskType: 'pitch_book',
+  label: 'Pitch Book',
+  description: 'Composite deck: situation, thesis, comps, precedents, illustrative LBO, recommendation.',
+  required: [
+    {
+      id: 'pitch_focus',
+      label: 'Pitch focus',
+      prompt: 'What kind of pitch?',
+      kind: 'select',
+      default: 'strategic_overview',
+      options: [
+        { value: 'sell_side_ma', label: 'Sell-side M&A' },
+        { value: 'buy_side_ma', label: 'Buy-side M&A' },
+        { value: 'follow_on', label: 'Follow-on equity raise' },
+        { value: 'strategic_overview', label: 'Strategic overview / board' },
+      ],
+    },
+    {
+      id: 'deck_length',
+      label: 'Deck length',
+      prompt: 'How long?',
+      kind: 'select',
+      default: 'standard',
+      options: [
+        { value: 'short', label: 'Short (6-8 slides)' },
+        { value: 'standard', label: 'Standard (10-12 slides)' },
+        { value: 'detailed', label: 'Detailed (15-20 slides)' },
+      ],
+    },
+  ],
+  recommended: [
+    {
+      id: 'num_comps',
+      label: 'Trading comps count',
+      prompt: 'How many trading comps to include?',
+      kind: 'numeric',
+      default: 8,
+      unit: 'companies',
+      min: 4,
+      max: 20,
+      step: 1,
+    },
+    {
+      id: 'comp_universe_scope',
+      label: 'Comp scope',
+      prompt: 'Comp universe tightness',
+      kind: 'select',
+      default: 'sector_plus',
+      options: [
+        { value: 'pure_play', label: 'Pure-play' },
+        { value: 'sector_plus', label: 'Sector + adjacent' },
+        { value: 'broad', label: 'Broad consumer / industry' },
+      ],
+    },
+    {
+      id: 'num_precedents',
+      label: 'Precedent count',
+      prompt: 'How many precedent transactions?',
+      kind: 'numeric',
+      default: 6,
+      unit: 'deals',
+      min: 3,
+      max: 15,
+      step: 1,
+    },
+    {
+      id: 'include_lbo',
+      label: 'Include LBO scenario',
+      prompt: 'Include an illustrative sponsor LBO?',
+      kind: 'boolean',
+      default: true,
+    },
+  ],
+  optional: [],
+  validation: [],
+  data: [],
+};

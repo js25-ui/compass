@@ -36,7 +36,11 @@ interface AssistantTurn {
   latencyMs: number;
   phase: 'streaming' | 'done';
   error?: string;
-  clarification?: ClarificationPayload & { originalQuery: string; resolved?: boolean };
+  clarification?: ClarificationPayload & {
+    originalQuery: string;
+    acknowledgedScope: Record<string, string | number | boolean | string[]>;
+    resolved?: boolean;
+  };
 }
 
 type Turn = UserTurn | AssistantTurn;
@@ -118,7 +122,16 @@ function prettySourceShort(source: string, docType: string): string {
 type ChatEvent =
   | { type: 'started'; query: string }
   | { type: 'clarifying' }
-  | { type: 'clarification'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null; preface: string; questions: ClarifyQuestion[] }
+  | {
+      type: 'clarification';
+      task_type: string;
+      asset_class: string;
+      detected_target: { name: string; ticker?: string } | null;
+      preface: string;
+      questions: ClarifyQuestion[];
+      acknowledged_scope?: Record<string, string | number | boolean | string[]>;
+      acknowledged_pills?: Array<{ paramId: string; label: string; source: 'current_prompt' | 'conversation_history' | 'standing_preference' | 'inferred' }>;
+    }
   | { type: 'classified'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null }
   | { type: 'thinking' }
   | { type: 'tool_call'; name: string; input: Record<string, unknown> }
@@ -249,6 +262,8 @@ function ConversationView() {
               detectedTarget: event.detected_target,
               preface: event.preface,
               questions: event.questions,
+              acknowledgedPills: event.acknowledged_pills,
+              acknowledgedScope: event.acknowledged_scope ?? {},
               originalQuery: trimmed,
               resolved: false,
             },
@@ -311,9 +326,12 @@ function ConversationView() {
           : t,
       ),
     );
+    // Merge previously-extracted scope with the user's new form answers.
+    // New form answers take precedence (user revising what was extracted).
+    const mergedScope = { ...turn.clarification.acknowledgedScope, ...answers };
     void submit({
       question: turn.clarification.originalQuery,
-      scope: answers,
+      scope: mergedScope,
       taskType: turn.clarification.taskType,
       detectedTarget: turn.clarification.detectedTarget,
       showAsUserTurn: false,

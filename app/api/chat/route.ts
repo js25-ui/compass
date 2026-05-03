@@ -78,17 +78,27 @@ export async function POST(request: NextRequest) {
               detected_target: scope.detected_target,
               preface: scope.preface,
               questions: scope.questions,
+              acknowledged_scope: scope.acknowledged_scope,
+              acknowledged_pills: scope.acknowledged_pills,
             });
             emit({ type: 'done', latencyMs: 0 });
             return;
           }
+          // ready_to_proceed = true (everything was extracted from the prompt or no clarification needed).
+          // Merge any extracted scope into the body so the deliverable pipeline gets it.
           if (scope) {
             emit({
               type: 'classified',
               task_type: scope.task_type,
               asset_class: scope.asset_class,
               detected_target: scope.detected_target,
+              acknowledged_pills: scope.acknowledged_pills,
             });
+            if (Object.keys(scope.acknowledged_scope).length > 0) {
+              body.scope = { ...(scope.acknowledged_scope as ScopeAnswers), ...(body.scope ?? {}) };
+              body.task_type = scope.task_type;
+              body.detected_target = scope.detected_target ?? body.detected_target;
+            }
           }
         }
 

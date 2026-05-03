@@ -1,0 +1,90 @@
+import type { TaskManifest } from './types';
+
+export const BOND_PRICING_MANIFEST: TaskManifest = {
+  taskType: 'bond_pricing',
+  label: 'Bond Pricing',
+  description: 'Spread-to-Treasury recommendation, comp set of recent issuance, rate scenarios.',
+  required: [
+    {
+      id: 'tenor_years',
+      label: 'Tenor',
+      prompt: 'Tenor?',
+      kind: 'select',
+      default: '10',
+      options: [
+        { value: '3', label: '3Y' },
+        { value: '5', label: '5Y' },
+        { value: '7', label: '7Y' },
+        { value: '10', label: '10Y' },
+        { value: '20', label: '20Y' },
+        { value: '30', label: '30Y' },
+      ],
+    },
+    {
+      id: 'currency',
+      label: 'Currency',
+      prompt: 'Issuance currency',
+      kind: 'select',
+      default: 'usd',
+      options: [
+        { value: 'usd', label: 'USD' },
+        { value: 'eur', label: 'EUR' },
+        { value: 'gbp', label: 'GBP' },
+        { value: 'jpy', label: 'JPY' },
+      ],
+    },
+  ],
+  recommended: [
+    {
+      id: 'issue_size_m',
+      label: 'Issue size',
+      prompt: 'Proposed issue size',
+      kind: 'numeric',
+      default: 1000,
+      unit: '$M',
+      min: 100,
+      max: 50000,
+      step: 50,
+    },
+    {
+      id: 'comp_window_months',
+      label: 'Comp window',
+      prompt: 'Lookback window for comparable prints',
+      kind: 'numeric',
+      default: 12,
+      unit: 'months',
+      min: 3,
+      max: 36,
+      step: 3,
+    },
+    {
+      id: 'coupon_type',
+      label: 'Coupon type',
+      prompt: 'Fixed or floating?',
+      kind: 'select',
+      default: 'fixed',
+      options: [
+        { value: 'fixed', label: 'Fixed' },
+        { value: 'floating', label: 'Floating' },
+      ],
+    },
+    {
+      id: 'pricing_method',
+      label: 'Pricing methodology',
+      prompt: 'Anchor on spread to Treasury or YTM?',
+      kind: 'select',
+      default: 'spread_treasury',
+      options: [
+        { value: 'spread_treasury', label: 'Spread to Treasury' },
+        { value: 'ytm', label: 'Yield to Maturity' },
+      ],
+    },
+  ],
+  optional: [],
+  validation: [],
+  data: [
+    { metric: 'revenue', period: 'annual_latest', required: true },
+    { metric: 'operating_income', period: 'annual_latest', required: true },
+    { metric: 'long_term_debt', period: 'annual_latest', required: false },
+  ],
+};

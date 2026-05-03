@@ -1021,6 +1021,30 @@ button { font-family: inherit; }
 .clarify-preface {
   font-size: 13px; color: #d5d5d5; line-height: 1.5; margin-bottom: 14px;
 }
+.clarify-ack {
+  background: #0d1a2a;
+  border: 1px solid #1f3656;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.clarify-ack-label {
+  font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: #93bbff; font-weight: 600; margin-bottom: 8px;
+}
+.clarify-ack-pills {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.clarify-ack-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: #1f3656; border: 1px solid #2a4570;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #ddeeff;
+}
+.clarify-ack-pill-label { font-weight: 600; }
+.clarify-ack-pill-source {
+  font-size: 9px; color: #6b8db8; text-transform: uppercase; letter-spacing: 0.5px;
+}
 .clarify-form { display: flex; flex-direction: column; gap: 14px; }
 .clarify-question { display: flex; flex-direction: column; gap: 6px; }
 .clarify-question-prompt {

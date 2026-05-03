@@ -3,12 +3,19 @@
 import { useMemo, useState } from 'react';
 import type { ClarifyQuestion } from '@/lib/agents/clarify';
 
+export interface AcknowledgementPill {
+  paramId: string;
+  label: string;
+  source: 'current_prompt' | 'conversation_history' | 'standing_preference' | 'inferred';
+}
+
 export interface ClarificationPayload {
   taskType: string;
   assetClass: string;
   detectedTarget: { name: string; ticker?: string } | null;
   preface: string;
   questions: ClarifyQuestion[];
+  acknowledgedPills?: AcknowledgementPill[];
 }
 
 interface ClarificationCardProps {
@@ -62,6 +69,20 @@ export function ClarificationCard({ payload, disabled, onSubmit }: Clarification
       </div>
 
       {payload.preface ? <p className="clarify-preface">{payload.preface}</p> : null}
+
+      {payload.acknowledgedPills && payload.acknowledgedPills.length > 0 ? (
+        <div className="clarify-ack">
+          <div className="clarify-ack-label">What I have</div>
+          <div className="clarify-ack-pills">
+            {payload.acknowledgedPills.map(p => (
+              <span key={p.paramId} className="clarify-ack-pill">
+                <span className="clarify-ack-pill-label">{p.label}</span>
+                <span className="clarify-ack-pill-source">{sourceLabelFor(p.source)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <form className="clarify-form" onSubmit={handleSubmit}>
         {payload.questions.map(q => (
@@ -209,6 +230,16 @@ function RangeWarning({ value, min, max, unit }: RangeWarningProps) {
   if (max !== undefined && value > max) warning = `Above typical ceiling (${max}${unit ? ' ' + unit : ''}). Compass will still run.`;
   if (!warning) return null;
   return <div className="clarify-warning">⚠ {warning}</div>;
+}
+
+function sourceLabelFor(source: AcknowledgementPill['source']): string {
+  switch (source) {
+    case 'current_prompt': return 'from your prompt';
+    case 'conversation_history': return 'from earlier';
+    case 'standing_preference': return 'standing preference';
+    case 'inferred': return 'inferred';
+    default: return source;
+  }
 }
 
 function formatRange(min: number | undefined, max: number | undefined, unit: string | undefined): string {
