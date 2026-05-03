@@ -2,6 +2,13 @@ import { NextRequest } from 'next/server';
 import { runChatAgent } from '@/lib/agents/chat_agent';
 import { clarifyScope, type ClarifyOutput, type ClarifyQuestion } from '@/lib/agents/clarify';
 import { runLBOPipeline, type LBOScope } from '@/lib/agents/deliverables/lbo_pipeline';
+import { runTradingCompsPipeline, type TradingCompsScope } from '@/lib/agents/deliverables/trading_comps';
+import { runIPOValuationPipeline, type IPOValuationScope } from '@/lib/agents/deliverables/ipo_valuation';
+import { runBondPricingPipeline, type BondPricingScope } from '@/lib/agents/deliverables/bond_pricing';
+import { runPrecedentsPipeline, type PrecedentsScope } from '@/lib/agents/deliverables/precedents';
+import { runICMemoPipeline, type ICMemoScope } from '@/lib/agents/deliverables/ic_memo';
+import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/deliverables/pitch_book';
+import type { DeliverableEvent } from '@/lib/agents/deliverables/shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,20 +92,11 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Route LBO deliverables to the dedicated pipeline. Other model
-        // types fall through to the general chat agent for now (Phase B work).
-        if (hasScope && body.task_type === 'lbo_analysis') {
-          for await (const event of runLBOPipeline({
-            query,
-            scope: (body.scope as LBOScope) ?? {},
-            detectedTarget: body.detected_target ?? null,
-          })) {
-            if (event.type === 'progress') emit({ type: 'tool_result', name: 'lbo_pipeline', summary: event.step ?? '' });
-            else if (event.type === 'inputs_resolved') emit({ type: 'tool_result', name: 'lbo_pipeline', summary: `Inputs resolved: entry ${event.inputs?.entryEV}M, leverage ${event.inputs?.leverageMultiple}x, hold ${event.inputs?.holdPeriod}y, exit ${event.inputs?.exitMultiple}x` });
-            else if (event.type === 'sources') emit({ type: 'sources', sources: event.sources?.map(s => ({ ...s, source: 'compass_internal', docType: 'lbo_model', filedAt: null, isPrimary: false, similarity: 1 })) });
-            else if (event.type === 'token') emit({ type: 'token', text: event.text });
-            else if (event.type === 'done') emit({ type: 'done', latencyMs: 0 });
-            else if (event.type === 'error') emit({ type: 'error', error: event.error });
+        // Route deliverable task types to dedicated pipelines.
+        const deliverable = pickDeliverableGenerator(body, query);
+        if (deliverable) {
+          for await (const event of deliverable.gen) {
+            relayDeliverableEvent(event, deliverable.label, emit);
           }
           return;
         }
@@ -125,6 +123,76 @@ export async function POST(request: NextRequest) {
       'X-Accel-Buffering': 'no',
     },
   });
+}
+
+function pickDeliverableGenerator(
+  body: Body,
+  query: string,
+): { label: string; gen: AsyncGenerator<DeliverableEvent, void> } | null {
+  const detectedTarget = body.detected_target ?? null;
+  const scope = (body.scope ?? {}) as Record<string, unknown>;
+  const hasScope = Object.keys(scope).length > 0;
+  const tt = body.task_type;
+
+  // LBO requires scope for input parameters; others can run with empty scope (defaults).
+  if (tt === 'lbo_analysis' && hasScope) {
+    return {
+      label: 'lbo_pipeline',
+      gen: runLBOPipeline({ query, scope: scope as LBOScope, detectedTarget }) as unknown as AsyncGenerator<DeliverableEvent, void>,
+    };
+  }
+  if (tt === 'trading_comps') {
+    return {
+      label: 'trading_comps',
+      gen: runTradingCompsPipeline({ query, scope: scope as TradingCompsScope, detectedTarget }),
+    };
+  }
+  if (tt === 'ipo_pricing') {
+    return {
+      label: 'ipo_valuation',
+      gen: runIPOValuationPipeline({ query, scope: scope as IPOValuationScope, detectedTarget }),
+    };
+  }
+  if (tt === 'bond_pricing') {
+    return {
+      label: 'bond_pricing',
+      gen: runBondPricingPipeline({ query, scope: scope as BondPricingScope, detectedTarget }),
+    };
+  }
+  if (tt === 'ic_memo') {
+    return {
+      label: 'ic_memo',
+      gen: runICMemoPipeline({ query, scope: scope as ICMemoScope, detectedTarget }),
+    };
+  }
+  if (tt === 'pitch_book') {
+    return {
+      label: 'pitch_book',
+      gen: runPitchBookPipeline({ query, scope: scope as PitchBookScope, detectedTarget }),
+    };
+  }
+  // Precedents shows up as a "task_type" only via direct API; clarify routes it through chat_answer.
+  return null;
+}
+
+interface RelayEmit {
+  (event: object): void;
+}
+
+function relayDeliverableEvent(event: unknown, label: string, emit: RelayEmit): void {
+  // Accept either DeliverableEvent shape or LBOPipelineEvent shape.
+  const ev = event as { type: string; step?: string; text?: string; sources?: Array<{ n: number; title: string; url: string | null; meta: string }>; error?: string; inputs?: Record<string, unknown> };
+  if (ev.type === 'progress') emit({ type: 'tool_result', name: label, summary: ev.step ?? '' });
+  else if (ev.type === 'inputs_resolved') {
+    const i = ev.inputs as { entryEV?: number; leverageMultiple?: number; holdPeriod?: number; exitMultiple?: number } | undefined;
+    if (i) emit({ type: 'tool_result', name: label, summary: `Inputs: entry $${i.entryEV}M · ${i.leverageMultiple}x leverage · ${i.holdPeriod}y hold · ${i.exitMultiple}x exit` });
+  }
+  else if (ev.type === 'sources') {
+    emit({ type: 'sources', sources: ev.sources?.map(s => ({ ...s, source: 'compass_internal', docType: label, filedAt: null, isPrimary: false, similarity: 1 })) });
+  }
+  else if (ev.type === 'token') emit({ type: 'token', text: ev.text });
+  else if (ev.type === 'done') emit({ type: 'done', latencyMs: 0 });
+  else if (ev.type === 'error') emit({ type: 'error', error: ev.error });
 }
 
 function buildScopedQuery(query: string, scope: ScopeAnswers, taskType?: string): string {

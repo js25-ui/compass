@@ -1,0 +1,118 @@
+/**
+ * Shared helpers for deliverable pipelines.
+ * Common formatting, Sonnet JSON-output wrapper, HTML escape, etc.
+ */
+
+import { getAnthropic, SONNET_MODEL } from '@/lib/llm/anthropic';
+
+export async function sonnetJson<T>(opts: {
+  systemPrompt: string;
+  userMessage: string;
+  maxTokens?: number;
+}): Promise<T> {
+  const client = getAnthropic();
+  const response = await client.messages.create({
+    model: SONNET_MODEL,
+    max_tokens: opts.maxTokens ?? 2000,
+    system: [{ type: 'text', text: opts.systemPrompt, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: opts.userMessage }],
+  });
+  const text = response.content
+    .filter(b => b.type === 'text')
+    .map(b => (b as { type: 'text'; text: string }).text)
+    .join('');
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end < 0) throw new Error(`Sonnet returned non-JSON: ${cleaned.slice(0, 200)}`);
+  return JSON.parse(cleaned.slice(start, end + 1)) as T;
+}
+
+export function escape(s: string): string {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export function fmtPct(n: number, places = 1): string {
+  if (!Number.isFinite(n)) return '—';
+  return `${(n * 100).toFixed(places)}%`;
+}
+
+export function fmtPctRaw(n: number, places = 1): string {
+  if (!Number.isFinite(n)) return '—';
+  return `${n.toFixed(places)}%`;
+}
+
+export function fmtMillions(n: number): string {
+  if (!Number.isFinite(n) || n == null) return '—';
+  if (Math.abs(n) >= 1000) return `$${(n / 1000).toFixed(1)}B`;
+  return `$${Math.round(n).toLocaleString()}M`;
+}
+
+export function fmtMultiple(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  return `${n.toFixed(1)}x`;
+}
+
+export function fmtBps(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  return `${Math.round(n)} bps`;
+}
+
+/** Build an HTML <table class="memo-table">. */
+export function table(opts: {
+  compact?: boolean;
+  headers: string[];
+  rows: Array<Array<string | { value: string; numeric?: boolean; strong?: boolean; highlight?: boolean }>>;
+  numericColumns?: number[];   // 0-indexed columns that should be right-aligned
+}): string {
+  const cls = `memo-table${opts.compact ? ' memo-table-compact' : ''}`;
+  const numericSet = new Set(opts.numericColumns ?? []);
+  const headerRow = opts.headers
+    .map((h, i) => `<th${numericSet.has(i) ? ' class="num"' : ''}>${escape(h)}</th>`)
+    .join('');
+  const bodyRows = opts.rows
+    .map(row => {
+      const tds = row
+        .map((cell, i) => {
+          if (typeof cell === 'string') {
+            return `<td${numericSet.has(i) ? ' class="num"' : ''}>${escape(cell)}</td>`;
+          }
+          const classes: string[] = [];
+          if (numericSet.has(i) || cell.numeric) classes.push('num');
+          if (cell.highlight) classes.push('memo-cell-highlight');
+          const inner = cell.strong ? `<strong>${escape(cell.value)}</strong>` : escape(cell.value);
+          return `<td${classes.length ? ` class="${classes.join(' ')}"` : ''}>${inner}</td>`;
+        })
+        .join('');
+      return `<tr>${tds}</tr>`;
+    })
+    .join('');
+  return `<table class="${cls}"><thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+}
+
+export function section(heading: string): string {
+  return `<h3 class="memo-h3">${escape(heading)}</h3>`;
+}
+
+export function note(html: string, kind: 'info' | 'warn' = 'info'): string {
+  const style = kind === 'warn' ? ' style="border-left-color:#fbbf24"' : '';
+  return `<p class="memo-data-note"${style}>${html}</p>`;
+}
+
+export function disclaimer(html: string): string {
+  return `<p class="memo-disclaimer">${html}</p>`;
+}
+
+/** Generic deliverable event shape. */
+export interface DeliverableEvent {
+  type: 'progress' | 'token' | 'sources' | 'done' | 'error';
+  step?: string;
+  text?: string;
+  sources?: Array<{ n: number; title: string; url: string | null; meta: string }>;
+  error?: string;
+}

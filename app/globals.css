@@ -808,6 +808,136 @@ button { font-family: inherit; }
   padding-top: 10px;
   border-top: 1px solid #1f1f1f;
 }
+.chat-msg-content .memo-rec-banner {
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-left: 3px solid #4a90e2;
+  padding: 16px 20px;
+  margin: 14px 0;
+}
+.chat-msg-content .memo-rec-label {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #888;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.chat-msg-content .memo-rec-headline {
+  font-size: 15px;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.chat-msg-content .memo-rec-conviction {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: #888;
+  margin-top: 8px;
+  font-weight: 600;
+}
+.chat-msg-content .memo-numbered {
+  list-style: none;
+  counter-reset: memo-num;
+  padding: 0;
+  margin: 0 0 14px;
+}
+.chat-msg-content .memo-numbered li {
+  counter-increment: memo-num;
+  position: relative;
+  padding-left: 30px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #d5d5d5;
+  line-height: 1.5;
+}
+.chat-msg-content .memo-numbered li::before {
+  content: counter(memo-num);
+  position: absolute;
+  left: 0; top: 0;
+  width: 22px;
+  font-weight: 600;
+  color: #4a90e2;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.chat-msg-content .memo-numbered li strong { color: #fff; }
+.chat-msg-content .memo-bullets {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+}
+.chat-msg-content .memo-bullets li {
+  font-size: 12px;
+  color: #d5d5d5;
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+.chat-msg-content .memo-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.chat-msg-content .memo-col-header {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.chat-msg-content .memo-risk-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #1f1f1f;
+}
+.chat-msg-content .memo-risk-row:last-of-type { border-bottom: none; }
+.chat-msg-content .memo-risk-severity {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  padding: 2px 6px;
+  text-align: center;
+  align-self: start;
+  height: fit-content;
+}
+.chat-msg-content .memo-risk-severity.sev-high {
+  background: #2a1414; color: #f87171; border: 1px solid #3a1e1e;
+}
+.chat-msg-content .memo-risk-severity.sev-medium {
+  background: #2a2414; color: #fbbf24; border: 1px solid #3a3214;
+}
+.chat-msg-content .memo-risk-severity.sev-low {
+  background: #142a1c; color: #4ade80; border: 1px solid #1e3a2a;
+}
+.chat-msg-content .memo-risk-body { font-size: 12px; color: #d5d5d5; line-height: 1.5; }
+.chat-msg-content .memo-risk-mitigation {
+  font-size: 11px; color: #888; margin-top: 4px;
+}
+.chat-msg-content .memo-citations {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: memo-cite;
+}
+.chat-msg-content .memo-citations li {
+  counter-increment: memo-cite;
+  position: relative;
+  padding-left: 30px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: #ccc;
+  line-height: 1.4;
+}
+.chat-msg-content .memo-citations li::before {
+  content: "[" counter(memo-cite) "]";
+  position: absolute; left: 0; top: 0;
+  font-weight: 600; color: #4a90e2;
+}
+.chat-msg-content .memo-citation-meta {
+  font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px;
+}
 
 /* Workstation: search-first landing */
 .recent-news-section { margin-bottom: 60px; }
