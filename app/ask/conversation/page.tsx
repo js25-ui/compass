@@ -26,6 +26,12 @@ interface ChatSource {
   similarity: number;
 }
 
+interface DeliverableContext {
+  taskType: string;
+  detectedTarget: { name: string; ticker?: string } | null;
+  scope: Record<string, string | number | boolean | string[]>;
+}
+
 interface AssistantTurn {
   id: number;
   role: 'assistant';
@@ -36,6 +42,8 @@ interface AssistantTurn {
   latencyMs: number;
   phase: 'streaming' | 'done';
   error?: string;
+  /** Set when this turn ran a deliverable; used as prior_context on subsequent turns. */
+  deliverable?: DeliverableContext;
   clarification?: ClarificationPayload & {
     originalQuery: string;
     acknowledgedScope: Record<string, string | number | boolean | string[]>;
@@ -121,6 +129,8 @@ function prettySourceShort(source: string, docType: string): string {
 
 type ChatEvent =
   | { type: 'started'; query: string }
+  | { type: 'classified'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null; acknowledged_pills?: Array<{ paramId: string; label: string; source: 'current_prompt' | 'conversation_history' | 'standing_preference' | 'inferred' }> }
+  | { type: 'deliverable_context'; task_type: string; detected_target: { name: string; ticker?: string } | null; scope: Record<string, string | number | boolean | string[]> }
   | { type: 'clarifying' }
   | {
       type: 'clarification';
@@ -169,6 +179,21 @@ function ConversationView() {
     const startedAt = Date.now();
     const assistantId = ++idRef.current;
 
+    // For free-form follow-ups (no scope override), thread the most-recently-
+    // completed deliverable as prior_context so the backend can detect tweaks
+    // like "re-run with $11B" without re-asking everything.
+    const lastDeliverable = !opts.scope
+      ? [...turns].reverse().find(
+          (t): t is AssistantTurn => t.role === 'assistant' && Boolean(t.deliverable),
+        )?.deliverable
+      : undefined;
+    const recentHistory = !opts.scope
+      ? turns.slice(-10).map(t => ({
+          role: t.role,
+          text: t.role === 'user' ? t.text : stripHtml(t.html || ''),
+        }))
+      : undefined;
+
     setTurns(prev => {
       const next = [...prev];
       if (opts.showAsUserTurn !== false) {
@@ -201,6 +226,8 @@ function ConversationView() {
           ...(opts.scope ? { scope: opts.scope } : {}),
           ...(opts.taskType ? { task_type: opts.taskType } : {}),
           ...(opts.detectedTarget ? { detected_target: opts.detectedTarget } : {}),
+          ...(lastDeliverable ? { prior_context: lastDeliverable } : {}),
+          ...(recentHistory && recentHistory.length > 0 ? { history: recentHistory } : {}),
         }),
       });
       if (!res.body) throw new Error('No response stream');
@@ -266,6 +293,16 @@ function ConversationView() {
               acknowledgedScope: event.acknowledged_scope ?? {},
               originalQuery: trimmed,
               resolved: false,
+            },
+          }));
+        }
+        if (event.type === 'deliverable_context') {
+          updateAssistant(t => ({
+            ...t,
+            deliverable: {
+              taskType: event.task_type,
+              detectedTarget: event.detected_target,
+              scope: event.scope,
             },
           }));
         }
@@ -435,6 +472,13 @@ function ConversationView() {
       </div>
     </div>
   );
+}
+
+function stripHtml(s: string): string {
+  // Cheap text-only extraction for history payloads. Loses formatting but
+  // preserves the substantive answer text — that's all the param extractor
+  // needs to reason over prior turns.
+  return s.replace(/<[^>]*>/g, ' ').replace(/&[a-z]+;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
 }
 
 function escapeHtml(s: string): string {

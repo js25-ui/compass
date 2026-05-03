@@ -1,6 +1,10 @@
 import { NextRequest } from 'next/server';
 import { runChatAgent } from '@/lib/agents/chat_agent';
 import { clarifyScope, type ClarifyOutput, type ClarifyQuestion } from '@/lib/agents/clarify';
+import { detectFollowUp } from '@/lib/agents/follow_up';
+import { extractParameters } from '@/lib/agents/parameter_extractor';
+import { manifestFor } from '@/lib/manifests';
+import type { TaskType } from '@/lib/manifests/types';
 import { runLBOPipeline, type LBOScope } from '@/lib/agents/deliverables/lbo_pipeline';
 import { runTradingCompsPipeline, type TradingCompsScope } from '@/lib/agents/deliverables/trading_comps';
 import { runIPOValuationPipeline, type IPOValuationScope } from '@/lib/agents/deliverables/ipo_valuation';
@@ -28,6 +32,15 @@ interface Body {
   detected_target?: { name: string; ticker?: string } | null;
   /** Skip clarify regardless. Used for plain chat queries the caller knows are not deliverable-driven. */
   skip_clarify?: boolean;
+  /** Most-recently-completed deliverable context. When the new query is a follow-up
+   *  ("re-run with $11B"), the chat reuses this and applies the new query as overrides. */
+  prior_context?: {
+    task_type: string;
+    detected_target: { name: string; ticker?: string } | null;
+    scope: Record<string, string | number | boolean | string[]>;
+  } | null;
+  /** Recent conversation turns — passed to the parameter extractor for cross-turn signals. */
+  history?: Array<{ role: 'user' | 'assistant'; text: string }>;
 }
 
 export async function POST(request: NextRequest) {
@@ -61,7 +74,63 @@ export async function POST(request: NextRequest) {
 
         const hasScope = body.scope && Object.keys(body.scope).length > 0;
 
-        if (!hasScope && !body.skip_clarify) {
+        // ----- Follow-up fast path -----
+        // If the user has prior context AND the new query reads like a tweak
+        // ("re-run with $11B", "what if leverage is 7x", "same but Apple"),
+        // skip clarify and run the prior deliverable with merged scope.
+        if (!hasScope && !body.skip_clarify && body.prior_context) {
+          const priorTargetName = body.prior_context.detected_target?.name ?? null;
+          const followUp = await detectFollowUp(query, priorTargetName);
+          if (followUp.isFollowUp) {
+            const priorTaskType = body.prior_context.task_type as TaskType;
+            const manifest = manifestFor(priorTaskType);
+            // Run extractor on the follow-up text against the prior task's manifest
+            // to pick up parameter overrides like "$11B" or "leverage to 7x".
+            let overrides: Record<string, string | number | boolean | string[]> = {};
+            try {
+              const extraction = await extractParameters({
+                query,
+                manifest,
+                history: body.history,
+              });
+              for (const e of extraction.extracted) {
+                overrides[e.paramId] = e.value;
+              }
+            } catch {
+              overrides = {};
+            }
+            const mergedScope = { ...body.prior_context.scope, ...overrides };
+            const targetForRun = followUp.newTarget
+              ? { name: followUp.newTarget.name, ticker: followUp.newTarget.ticker }
+              : body.prior_context.detected_target;
+
+            emit({
+              type: 'classified',
+              task_type: priorTaskType,
+              asset_class: 'unknown',
+              detected_target: targetForRun,
+              acknowledged_pills: [
+                {
+                  paramId: 'follow_up',
+                  label: `Reusing ${manifest.label}${targetForRun?.name ? ' on ' + targetForRun.name : ''}${followUp.newTarget ? ` (switched from ${priorTargetName})` : ''}`,
+                  source: 'conversation_history' as const,
+                },
+                ...Object.entries(overrides).map(([k, v]) => ({
+                  paramId: k,
+                  label: `${k} → ${formatScopeVal(v)}`,
+                  source: 'current_prompt' as const,
+                })),
+              ],
+            });
+
+            body.scope = mergedScope as ScopeAnswers;
+            body.task_type = priorTaskType;
+            body.detected_target = targetForRun;
+          }
+        }
+
+        const hasScopeAfterFollowUp = body.scope && Object.keys(body.scope).length > 0;
+        if (!hasScopeAfterFollowUp && !body.skip_clarify) {
           emit({ type: 'clarifying' });
           let scope: ClarifyOutput | null = null;
           try {
@@ -105,6 +174,14 @@ export async function POST(request: NextRequest) {
         // Route deliverable task types to dedicated pipelines.
         const deliverable = pickDeliverableGenerator(body, query);
         if (deliverable) {
+          // Emit the deliverable context so the UI can carry it as
+          // prior_context for any follow-up tweaks ("re-run with $11B").
+          emit({
+            type: 'deliverable_context',
+            task_type: body.task_type,
+            detected_target: body.detected_target ?? null,
+            scope: body.scope ?? {},
+          });
           for await (const event of deliverable.gen) {
             relayDeliverableEvent(event, deliverable.label, emit);
           }
@@ -206,6 +283,13 @@ function relayDeliverableEvent(event: unknown, label: string, emit: RelayEmit): 
   else if (ev.type === 'token') emit({ type: 'token', text: ev.text });
   else if (ev.type === 'done') emit({ type: 'done', latencyMs: 0 });
   else if (ev.type === 'error') emit({ type: 'error', error: ev.error });
+}
+
+function formatScopeVal(v: string | number | boolean | string[]): string {
+  if (Array.isArray(v)) return v.join(', ');
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (typeof v === 'number' && Math.abs(v) >= 1000) return `$${(v / 1000).toFixed(1)}B`;
+  return String(v);
 }
 
 function buildScopedQuery(query: string, scope: ScopeAnswers, taskType?: string): string {
