@@ -746,6 +746,69 @@ button { font-family: inherit; }
 }
 .back-btn:hover { color: #fff; border-color: #555; }
 
+/* In-chat deliverable tables (LBO model output, comp tables, etc.) */
+.chat-msg-content .memo-h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #ccc;
+  font-weight: 600;
+  margin: 18px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #1f1f1f;
+}
+.chat-msg-content .memo-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: #0d0d0d;
+  border: 1px solid #1f1f1f;
+  margin-bottom: 14px;
+}
+.chat-msg-content .memo-table th {
+  background: #141414;
+  color: #888;
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 7px 10px;
+  border-bottom: 1px solid #2a2a2a;
+  font-weight: 600;
+}
+.chat-msg-content .memo-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #1a1a1a;
+  color: #ddd;
+}
+.chat-msg-content .memo-table .num { text-align: right; }
+.chat-msg-content .memo-table th.num { text-align: right; }
+.chat-msg-content .memo-table tbody tr:last-child td { border-bottom: none; }
+.chat-msg-content .memo-table-compact td,
+.chat-msg-content .memo-table-compact th { padding: 4px 8px; font-size: 11px; }
+.chat-msg-content .memo-cell-highlight {
+  background: #1f3656;
+  color: #fff;
+  font-weight: 600;
+}
+.chat-msg-content .memo-data-note {
+  background: #141414;
+  border-left: 2px solid #4a90e2;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #ccc;
+  margin: 10px 0;
+}
+.chat-msg-content .memo-disclaimer {
+  font-size: 10px;
+  color: #888;
+  font-style: italic;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #1f1f1f;
+}
+
 /* Workstation: search-first landing */
 .recent-news-section { margin-bottom: 60px; }
 .recent-news-header {

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { runChatAgent } from '@/lib/agents/chat_agent';
 import { clarifyScope, type ClarifyOutput, type ClarifyQuestion } from '@/lib/agents/clarify';
+import { runLBOPipeline, type LBOScope } from '@/lib/agents/deliverables/lbo_pipeline';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,6 +81,23 @@ export async function POST(request: NextRequest) {
               detected_target: scope.detected_target,
             });
           }
+        }
+
+        // Route LBO deliverables to the dedicated pipeline. Other model
+        // types fall through to the general chat agent for now (Phase B work).
+        if (hasScope && body.task_type === 'lbo_analysis') {
+          for await (const event of runLBOPipeline({
+            query,
+            scope: (body.scope as LBOScope) ?? {},
+          })) {
+            if (event.type === 'progress') emit({ type: 'tool_result', name: 'lbo_pipeline', summary: event.step ?? '' });
+            else if (event.type === 'inputs_resolved') emit({ type: 'tool_result', name: 'lbo_pipeline', summary: `Inputs resolved: entry ${event.inputs?.entryEV}M, leverage ${event.inputs?.leverageMultiple}x, hold ${event.inputs?.holdPeriod}y, exit ${event.inputs?.exitMultiple}x` });
+            else if (event.type === 'sources') emit({ type: 'sources', sources: event.sources?.map(s => ({ ...s, source: 'compass_internal', docType: 'lbo_model', filedAt: null, isPrimary: false, similarity: 1 })) });
+            else if (event.type === 'token') emit({ type: 'token', text: event.text });
+            else if (event.type === 'done') emit({ type: 'done', latencyMs: 0 });
+            else if (event.type === 'error') emit({ type: 'error', error: event.error });
+          }
+          return;
         }
 
         const agentInput = hasScope
