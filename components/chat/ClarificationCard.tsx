@@ -147,6 +147,11 @@ function QuestionInput({ question: q, value, onChange, disabled }: QuestionInput
 
   if (q.kind === 'numeric') {
     const rangeLabel = formatRange(q.min, q.max, q.unit);
+    // Intentionally no `max` HTML attr: caps are recommendations, not hard
+    // limits. Soft `min` only when it's a true floor (e.g. 0 — no negative
+    // multiples). The RangeWarning component surfaces values outside the
+    // recommended band as advisory.
+    const hardMin = q.min !== undefined && q.min <= 0 ? 0 : undefined;
     return (
       <div className="clarify-numeric">
         <input
@@ -155,13 +160,12 @@ function QuestionInput({ question: q, value, onChange, disabled }: QuestionInput
           className="clarify-input clarify-input-numeric"
           value={typeof value === 'number' ? value : Number(value) || 0}
           step={q.step ?? guessStep(q.unit)}
-          min={q.min}
-          max={q.max}
+          min={hardMin}
           onChange={e => onChange(Number(e.target.value))}
           disabled={disabled}
         />
         {q.unit ? <span className="clarify-unit">{q.unit}</span> : null}
-        {rangeLabel ? <span className="clarify-range">{rangeLabel}</span> : null}
+        {rangeLabel ? <span className="clarify-range">{rangeLabel} (recommended)</span> : null}
       </div>
     );
   }

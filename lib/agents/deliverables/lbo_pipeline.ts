@@ -94,10 +94,13 @@ export async function* runLBOPipeline(opts: {
   const ltdHistory = pre.history.long_term_debt ?? [];
   const _existingDebt = ltdHistory[0]?.value ?? 0;     // reserved for refinement; not yet wired into LBO calc
 
+  // Entry EV is mandatory — the clarify card always asks for it, and we never
+  // silently fall back to a derived number. If somehow scope.entry_ev is
+  // missing or non-positive, validators below will block.
   const entryEV =
     opts.scope.entry_ev != null && opts.scope.entry_ev > 0
       ? opts.scope.entry_ev
-      : extractEntryEVFromQuery(opts.query) ?? Math.round(initialRevenue * ebitdaMargin * 11); // 11x EBITDA default
+      : 0;     // 0 → validators flag entry_ev as required
 
   const inputs: LBOInputs = {
     entryEV,
@@ -175,7 +178,8 @@ function normalizePercent(v: number): number {
   return v / 100;
 }
 
-function extractEntryEVFromQuery(q: string): number | null {
+/** Used by the orchestrator (clarify) to populate entry_ev's default — not by the model. */
+export function extractEntryEVFromQuery(q: string): number | null {
   const tMatch = q.match(/\$\s*([\d.]+)\s*T(?:r|rillion)?\b/i);
   if (tMatch) return Math.round(parseFloat(tMatch[1]) * 1_000_000);     // $T → $M
   const bMatch = q.match(/\$\s*([\d.]+)\s*B(?:n|illion)?\b/i);

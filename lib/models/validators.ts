@@ -40,7 +40,12 @@ export function validateLBO(input: LBOValidatorInput): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   if (!isFinitePositive(input.entryEV)) {
-    issues.push({ level: 'error', field: 'entry_ev', message: 'Entry EV must be a positive number.', suggestion: 'Provide entry EV in $M.' });
+    issues.push({
+      level: 'error',
+      field: 'entry_ev',
+      message: 'Entry EV is required and must be a positive number.',
+      suggestion: 'Open the scope card and enter the entry enterprise value in $M (e.g. 1200 for $1.2B).',
+    });
   }
   if (!isFinitePositive(input.initialRevenue)) {
     issues.push({ level: 'error', field: 'revenue', message: 'Base-year revenue is missing or zero.', suggestion: 'Compass needs a real revenue figure to run an LBO. Try a public-company target.' });
