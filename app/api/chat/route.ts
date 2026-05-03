@@ -144,8 +144,11 @@ function pickDeliverableGenerator(
   const hasScope = Object.keys(scope).length > 0;
   const tt = body.task_type;
 
-  // LBO requires scope for input parameters; others can run with empty scope (defaults).
-  if (tt === 'lbo_analysis' && hasScope) {
+  // Task-type names come from the manifest registry now. Both the new
+  // canonical names ('lbo', 'ipo_valuation') and the legacy names
+  // ('lbo_analysis', 'ipo_pricing') are accepted so direct API calls
+  // from earlier consumers don't break silently.
+  if ((tt === 'lbo' || tt === 'lbo_analysis') && hasScope) {
     return {
       label: 'lbo_pipeline',
       gen: runLBOPipeline({ query, scope: scope as LBOScope, detectedTarget }) as unknown as AsyncGenerator<DeliverableEvent, void>,
@@ -157,7 +160,7 @@ function pickDeliverableGenerator(
       gen: runTradingCompsPipeline({ query, scope: scope as TradingCompsScope, detectedTarget }),
     };
   }
-  if (tt === 'ipo_pricing') {
+  if (tt === 'ipo_valuation' || tt === 'ipo_pricing') {
     return {
       label: 'ipo_valuation',
       gen: runIPOValuationPipeline({ query, scope: scope as IPOValuationScope, detectedTarget }),
