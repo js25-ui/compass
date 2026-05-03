@@ -165,12 +165,13 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     yield { type: 'thinking' };
 
-    // The LAST turn forces a final answer — Sonnet sees no tools, so it MUST
-    // produce a text response from whatever it's already retrieved. Prevents
-    // "ran out of turns and never spoke" silent failures.
+    // The LAST turn forces a final answer — tool_choice='none' tells Sonnet
+    // it cannot call tools this turn but the tool definitions stay in the
+    // request (required because prior turns in `messages` reference tool_use
+    // blocks; dropping `tools` causes Anthropic to return empty content).
     const isLastTurn = turn === MAX_TURNS - 1;
     const turnSystem = isLastTurn
-      ? `${SYSTEM_PROMPT}\n\nFINAL TURN: You have used your tool budget. Write the answer now using the search results already in this conversation. Acknowledge any data gaps explicitly. Do not request more tools — none are available this turn.`
+      ? `${SYSTEM_PROMPT}\n\nFINAL TURN: You have exhausted your tool budget. Write the final answer now using the tool results already in this conversation. Acknowledge any data gaps explicitly. You are not allowed to call any tools on this turn.`
       : SYSTEM_PROMPT;
 
     let response: Anthropic.Messages.Message;
@@ -179,7 +180,8 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
         model: SONNET_MODEL,
         max_tokens: 2000,
         system: [{ type: 'text', text: turnSystem, cache_control: { type: 'ephemeral' } }],
-        ...(isLastTurn ? {} : { tools: TOOLS as unknown as Anthropic.Messages.Tool[] }),
+        tools: TOOLS as unknown as Anthropic.Messages.Tool[],
+        ...(isLastTurn ? { tool_choice: { type: 'none' as const } } : {}),
         messages,
       });
     } catch (err) {
@@ -199,8 +201,15 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
       if (state.citations.length > 0) {
         yield { type: 'sources', sources: state.citations };
       }
-      const finalText = textBlocks.map(b => b.text).join('');
-      if (finalText) yield { type: 'token', text: finalText };
+      const finalText = textBlocks.map(b => b.text).join('').trim();
+      if (finalText) {
+        yield { type: 'token', text: finalText };
+      } else {
+        yield {
+          type: 'error',
+          error: `Sonnet returned no text on the final turn (stop_reason=${response.stop_reason ?? 'unknown'}, output_tokens=${response.usage.output_tokens}). The agent may have run out of useful tool calls. Try rephrasing the query.`,
+        };
+      }
       yield {
         type: 'usage',
         input: response.usage.input_tokens,
