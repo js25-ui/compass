@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { UserMessage, AssistantMessage } from '@/components/chat/ChatMessage';
 import { AgentActivity } from '@/components/chat/AgentActivity';
+import { ClarificationCard, type ClarificationPayload } from '@/components/chat/ClarificationCard';
+import type { ClarifyQuestion } from '@/lib/agents/clarify';
 
 interface UserTurn {
   id: number;
@@ -34,6 +36,7 @@ interface AssistantTurn {
   latencyMs: number;
   phase: 'streaming' | 'done';
   error?: string;
+  clarification?: ClarificationPayload & { originalQuery: string; resolved?: boolean };
 }
 
 type Turn = UserTurn | AssistantTurn;
@@ -60,6 +63,12 @@ function nowTimeString() {
 
 function activityLabelFor(event: ChatEvent): string | null {
   switch (event.type) {
+    case 'clarifying': return 'Scoping the engagement…';
+    case 'classified': {
+      const t = event.detected_target;
+      const target = t ? `${t.name}${t.ticker ? ` (${t.ticker})` : ''}` : '';
+      return `Classified: ${event.task_type.replace(/_/g, ' ')}${target ? ` · ${target}` : ''}`;
+    }
     case 'thinking': return 'Compass · thinking';
     case 'tool_call': return formatToolCall(event.name, event.input);
     case 'tool_result': return event.summary;
@@ -108,6 +117,9 @@ function prettySourceShort(source: string, docType: string): string {
 
 type ChatEvent =
   | { type: 'started'; query: string }
+  | { type: 'clarifying' }
+  | { type: 'clarification'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null; preface: string; questions: ClarifyQuestion[] }
+  | { type: 'classified'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null }
   | { type: 'thinking' }
   | { type: 'tool_call'; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; name: string; summary: string }
@@ -128,19 +140,27 @@ function ConversationView() {
   const seededRef = useRef<string | null>(null);
   const idRef = useRef(0);
 
-  const submit = async (question: string) => {
-    const trimmed = question.trim();
+  interface SubmitOpts {
+    question: string;
+    scope?: Record<string, string | number | boolean | string[]>;
+    taskType?: string;
+    showAsUserTurn?: boolean;     // false when re-submitting after clarification
+  }
+
+  const submit = async (opts: SubmitOpts) => {
+    const trimmed = opts.question.trim();
     if (!trimmed || streaming) return;
 
-    const userId = ++idRef.current;
-    const assistantId = ++idRef.current;
     const time = nowTimeString();
     const startedAt = Date.now();
+    const assistantId = ++idRef.current;
 
-    setTurns(prev => [
-      ...prev,
-      { id: userId, role: 'user', text: trimmed, time },
-      {
+    setTurns(prev => {
+      const next = [...prev];
+      if (opts.showAsUserTurn !== false) {
+        next.push({ id: ++idRef.current, role: 'user', text: trimmed, time });
+      }
+      next.push({
         id: assistantId,
         role: 'assistant',
         activity: [],
@@ -149,8 +169,9 @@ function ConversationView() {
         time,
         latencyMs: 0,
         phase: 'streaming',
-      },
-    ]);
+      });
+      return next;
+    });
     setStreaming(true);
 
     const updateAssistant = (mut: (t: AssistantTurn) => AssistantTurn) => {
@@ -161,7 +182,11 @@ function ConversationView() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: trimmed }),
+        body: JSON.stringify({
+          query: trimmed,
+          ...(opts.scope ? { scope: opts.scope } : {}),
+          ...(opts.taskType ? { task_type: opts.taskType } : {}),
+        }),
       });
       if (!res.body) throw new Error('No response stream');
 
@@ -194,6 +219,22 @@ function ConversationView() {
         if (label) {
           updateAssistant(t => ({ ...t, activity: [...t.activity, label] }));
         }
+        if (event.type === 'clarification') {
+          updateAssistant(t => ({
+            ...t,
+            phase: 'done',
+            latencyMs: Date.now() - startedAt,
+            clarification: {
+              taskType: event.task_type,
+              assetClass: event.asset_class,
+              detectedTarget: event.detected_target,
+              preface: event.preface,
+              questions: event.questions,
+              originalQuery: trimmed,
+              resolved: false,
+            },
+          }));
+        }
         if (event.type === 'sources') {
           updateAssistant(t => ({ ...t, sources: event.sources }));
         }
@@ -223,7 +264,7 @@ function ConversationView() {
   useEffect(() => {
     if (initialQ && seededRef.current !== initialQ) {
       seededRef.current = initialQ;
-      void submit(initialQ);
+      void submit({ question: initialQ });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQ]);
@@ -234,8 +275,29 @@ function ConversationView() {
   }, [turns]);
 
   const handleSend = () => {
-    void submit(input);
+    void submit({ question: input });
     setInput('');
+  };
+
+  const handleClarifyAnswer = (
+    turnId: number,
+    answers: Record<string, string | number | boolean | string[]>,
+  ) => {
+    const turn = turns.find(t => t.id === turnId);
+    if (!turn || turn.role !== 'assistant' || !turn.clarification) return;
+    setTurns(prev =>
+      prev.map(t =>
+        t.id === turnId && t.role === 'assistant' && t.clarification
+          ? { ...t, clarification: { ...t.clarification, resolved: true } }
+          : t,
+      ),
+    );
+    void submit({
+      question: turn.clarification.originalQuery,
+      scope: answers,
+      taskType: turn.clarification.taskType,
+      showAsUserTurn: false,
+    });
   };
 
   const lastAssistant = [...turns].reverse().find((t): t is AssistantTurn => t.role === 'assistant');
@@ -268,6 +330,13 @@ function ConversationView() {
               return (
                 <div key={turn.id}>
                   {turn.activity.length > 0 && <AgentActivity lines={turn.activity} />}
+                  {turn.clarification && !turn.clarification.resolved && (
+                    <ClarificationCard
+                      payload={turn.clarification}
+                      disabled={streaming}
+                      onSubmit={answers => handleClarifyAnswer(turn.id, answers)}
+                    />
+                  )}
                   {(turn.html || turn.error) && (
                     <AssistantMessage
                       html={turn.error ? `<p style="color:#f87171"><strong>Error:</strong> ${escapeHtml(turn.error)}</p>` : turn.html}

@@ -1,7 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { demoTargets, type BusinessLine } from '@/lib/demo-data';
 
 interface BLConfig {
@@ -14,113 +15,170 @@ interface BLConfig {
 }
 
 const blConfigs: BLConfig[] = [
-  {
-    id: 'ecm',
-    num: '01',
-    name: 'ECM',
-    fullname: 'Equity Capital Markets',
-    desc: 'Origination and execution across IPOs, follow-ons, secondaries, convertibles, and equity-linked products.',
-    tags: ['IPOs', 'Follow-Ons', 'Convertibles'],
-  },
-  {
-    id: 'dcm',
-    num: '02',
-    name: 'DCM',
-    fullname: 'Debt Capital Markets',
-    desc: 'Origination and analytics across IG corporate, high yield, leveraged loans, municipals, sovereigns, and securitized products.',
-    tags: ['IG Corp', 'HY', 'Muni', 'Sovereign'],
-  },
-  {
-    id: 'alts',
-    num: '03',
-    name: 'Alternatives',
-    fullname: 'Alternative Investments',
-    desc: 'Private markets and hedge funds. Sponsor-side modeling, Monte Carlo return analysis, and AI-disruption risk scoring.',
-    tags: ['Private Equity', 'Real Estate', 'Credit', 'Infra'],
-  },
+  { id: 'ecm', num: '01', name: 'ECM', fullname: 'Equity Capital Markets',
+    desc: 'IPOs, follow-ons, secondaries, convertibles.',
+    tags: ['IPOs', 'Follow-Ons', 'Convertibles'] },
+  { id: 'dcm', num: '02', name: 'DCM', fullname: 'Debt Capital Markets',
+    desc: 'IG, HY, leveraged loans, munis, sovereigns.',
+    tags: ['IG Corp', 'HY', 'Muni', 'Sovereign'] },
+  { id: 'alts', num: '03', name: 'Alternatives', fullname: 'Alternative Investments',
+    desc: 'PE, hedge funds, infrastructure, private credit.',
+    tags: ['PE', 'Real Estate', 'Credit', 'Infra'] },
 ];
 
-const quickTries: Array<{ label: string; bl: BusinessLine; targetId: string }> = [
-  { label: 'Cava Group IPO', bl: 'ecm', targetId: 'cava-ipo-2026' },
-  { label: 'Boeing 30Y Notes', bl: 'dcm', targetId: 'ba-30y-2056' },
-  { label: 'NYC GO Bonds', bl: 'dcm', targetId: 'nyc-go-2026' },
-  { label: 'Blackstone', bl: 'alts', targetId: 'blackstone-pe-2026' },
+interface NewsItem {
+  documentId: string;
+  targetId: string | null;
+  title: string;
+  url: string | null;
+  source: string;
+  docType: string;
+  filedAt: string | null;
+  isPrimary: boolean;
+}
+
+const SUGGESTED_TASKS = [
+  'Sweetgreen pitch book',
+  'Boeing bond pricing memo',
+  'LBO analysis on Datadog',
+  'Compare Cava and Chipotle',
+  "What's new in private equity?",
+  'Latest Fed commentary impact on IG',
 ];
 
 export default function WorkstationLandingPage() {
   const router = useRouter();
   const [search, setSearch] = useState('');
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [newsLoading, setNewsLoading] = useState(true);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const goToBL = (bl: BusinessLine) => {
-    const target = demoTargets.find(t => t.bl === bl);
-    if (target) router.push(`/workstation/${bl}/${target.id}`);
-  };
+  useEffect(() => {
+    inputRef.current?.focus();
+    void fetch('/api/recent-news?limit=10&days_back=14')
+      .then(r => r.json())
+      .then((j: { items?: NewsItem[] }) => setNews(j.items ?? []))
+      .catch(() => setNews([]))
+      .finally(() => setNewsLoading(false));
+  }, []);
 
-  const goToTarget = (bl: BusinessLine, targetId: string) => {
-    router.push(`/workstation/${bl}/${targetId}`);
+  const submit = (q: string) => {
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    router.push(`/ask/conversation?q=${encodeURIComponent(trimmed)}`);
   };
 
   return (
     <div className="landing-workstation">
       <div className="hero">
-        <div className="hero-eyebrow">Workstation · Manual Exploration</div>
-        <h1 className="hero-title">Six-stage analyst lifecycle across capital markets and alternatives.</h1>
+        <div className="hero-eyebrow">Workstation · Task-Driven Workflow</div>
+        <h1 className="hero-title">Compass scopes the work, gathers the inputs, builds the deliverable.</h1>
         <p className="hero-sub">
-          Choose a business line to explore deals, run models with Monte Carlo simulation, draft memos,
-          and synthesize action recommendations. For conversational queries with cited answers, switch
-          to Ask Compass.
+          Type a task — pitch book, IC memo, bond pricing, LBO analysis, or any open question — and Compass
+          will clarify scope, pull comps and filings, run the model, and assemble the output.
         </p>
         <div className="stages-row">
-          <div className="stage-chip">01 Research</div>
-          <div className="stage-chip">02 Diligence</div>
+          <div className="stage-chip">01 Clarify</div>
+          <div className="stage-chip">02 Gather</div>
           <div className="stage-chip">03 Model</div>
-          <div className="stage-chip">04 Memo</div>
-          <div className="stage-chip">05 Monitor</div>
-          <div className="stage-chip">06 Action</div>
+          <div className="stage-chip">04 Deliver</div>
         </div>
       </div>
 
       <div className="search-section">
         <div className="search-bar">
           <input
+            ref={inputRef}
             type="text"
             className="search-input"
-            placeholder="Type a company, ticker, deal, or thesis..."
+            placeholder="Search a deal, company, or task — e.g. 'Sweetgreen pitch book'"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') goToTarget('ecm', 'cava-ipo-2026');
-            }}
+            onKeyDown={e => { if (e.key === 'Enter') submit(search); }}
           />
-          <button className="search-btn" onClick={() => goToTarget('ecm', 'cava-ipo-2026')}>
-            Run Research
+          <button className="search-btn" onClick={() => submit(search)}>
+            Run
           </button>
         </div>
         <div className="search-hint">
           <span>Try:</span>
-          {quickTries.map(q => (
-            <span key={q.label} onClick={() => goToTarget(q.bl, q.targetId)}>{q.label}</span>
+          {SUGGESTED_TASKS.map(s => (
+            <span key={s} onClick={() => submit(s)}>{s}</span>
           ))}
         </div>
       </div>
 
-      <div className="verticals-label">Choose a business line</div>
-      <div className="business-lines">
-        {blConfigs.map(bl => (
-          <button key={bl.id} className="bl-tile" onClick={() => goToBL(bl.id)}>
-            <div className="bl-num">{bl.num}</div>
-            <div className="bl-name">{bl.name}</div>
-            <div className="bl-fullname">{bl.fullname}</div>
-            <div className="bl-desc">{bl.desc}</div>
-            <div className="bl-tags">
-              {bl.tags.map(t => (
-                <span key={t} className="bl-tag-mini">{t}</span>
-              ))}
+      <div className="recent-news-section">
+        <div className="recent-news-header">
+          <span className="recent-news-label">Recent Activity in the Corpus</span>
+          <span className="recent-news-meta">{newsLoading ? 'Loading…' : `${news.length} items · last 14 days`}</span>
+        </div>
+        <div className="recent-news-grid">
+          {news.map(item => (
+            <article key={item.documentId} className="recent-news-card" onClick={() => submit(item.title)}>
+              <div className="news-meta">
+                <span className={`feed-tag ${docTypeClass(item.source, item.docType)}`}>
+                  {prettyTag(item.source, item.docType)}
+                </span>
+                <span>{item.filedAt ? new Date(item.filedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</span>
+              </div>
+              <div className="news-title">{item.title}</div>
+              <div className="news-source">{prettySource(item.source)}{item.targetId ? ` · ${item.targetId}` : ''}</div>
+            </article>
+          ))}
+          {!newsLoading && news.length === 0 && (
+            <div className="recent-news-empty">
+              No corpus activity yet. Submit a task above and Compass will start indexing.
             </div>
-            <div className="bl-arrow">→</div>
-          </button>
-        ))}
+          )}
+        </div>
+      </div>
+
+      <div className="bl-secondary">
+        <div className="verticals-label">Or browse by business line</div>
+        <div className="business-lines">
+          {blConfigs.map(bl => {
+            const target = demoTargets.find(t => t.bl === bl.id);
+            const href = target ? `/workstation/${bl.id}/${target.id}` : '#';
+            return (
+              <Link key={bl.id} href={href} className="bl-tile" style={{ textDecoration: 'none' }}>
+                <div className="bl-num">{bl.num}</div>
+                <div className="bl-name">{bl.name}</div>
+                <div className="bl-fullname">{bl.fullname}</div>
+                <div className="bl-desc">{bl.desc}</div>
+                <div className="bl-tags">
+                  {bl.tags.map(t => <span key={t} className="bl-tag-mini">{t}</span>)}
+                </div>
+                <div className="bl-arrow">→</div>
+              </Link>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
+}
+
+function docTypeClass(source: string, docType: string): string {
+  if (source === 'sec_edgar') return 'filing';
+  if (source === 'gdelt') return 'news';
+  if (source === 'fred') return 'regulatory';
+  if (docType.toLowerCase().includes('transcript')) return 'transcript';
+  if (docType.toLowerCase().includes('pricing')) return 'pricing';
+  return 'news';
+}
+
+function prettyTag(source: string, docType: string): string {
+  if (source === 'sec_edgar') return docType.toUpperCase();
+  if (source === 'fred') return 'MACRO';
+  if (source === 'gdelt') return 'EVENT';
+  return 'NEWS';
+}
+
+function prettySource(source: string): string {
+  if (source === 'sec_edgar') return 'SEC EDGAR';
+  if (source === 'news_rss') return 'News RSS';
+  if (source === 'gdelt') return 'GDELT';
+  if (source === 'fred') return 'FRED';
+  return source;
 }

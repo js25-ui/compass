@@ -119,6 +119,44 @@ CREATE TABLE IF NOT EXISTS ingest_cursors (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Tasks: end-to-end work units (clarify → gather → model → deliver)
+CREATE TABLE IF NOT EXISTS tasks (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_query               TEXT NOT NULL,
+  target_id                TEXT REFERENCES targets(id),
+  task_type                TEXT,                          -- 'pitch_book' | 'ic_memo' | 'bond_pricing' | 'lbo_analysis' | 'chat_answer'
+  scope                    JSONB,                         -- clarified scope params (comp count, time window, etc.)
+  stage                    TEXT NOT NULL DEFAULT 'clarify',-- 'clarify' | 'gather' | 'model' | 'deliver' | 'done'
+  inputs_gathered          JSONB,
+  models_run               JSONB,
+  deliverables_generated   JSONB,
+  conversation_id          UUID,
+  created_at               TIMESTAMPTZ DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_target  ON tasks(target_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_stage   ON tasks(stage);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
+
+-- Generated documents (IC memos, pitch decks)
+CREATE TABLE IF NOT EXISTS generated_documents (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_id           TEXT REFERENCES targets(id),
+  conversation_id     UUID,
+  doc_type            TEXT NOT NULL,                 -- 'ic_memo' | 'pitch_deck'
+  format              TEXT NOT NULL,                 -- 'pdf' | 'pptx'
+  title               TEXT NOT NULL,
+  storage_path        TEXT NOT NULL,                 -- path within the 'generated-documents' bucket
+  metadata            JSONB,
+  generation_time_ms  INT,
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gen_docs_target  ON generated_documents(target_id);
+CREATE INDEX IF NOT EXISTS idx_gen_docs_conv    ON generated_documents(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_gen_docs_created ON generated_documents(created_at DESC);
+
 -- Eval results (port from telco capstone harness)
 CREATE TABLE IF NOT EXISTS eval_runs (
   id                            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,3 +180,5 @@ ALTER TABLE messages       DISABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_runs    DISABLE ROW LEVEL SECURITY;
 ALTER TABLE ingest_cursors DISABLE ROW LEVEL SECURITY;
 ALTER TABLE eval_runs      DISABLE ROW LEVEL SECURITY;
+ALTER TABLE generated_documents DISABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks               DISABLE ROW LEVEL SECURITY;
