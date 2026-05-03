@@ -17,6 +17,8 @@ interface Body {
   scope?: ScopeAnswers;
   /** Original task type from a previous clarify call — used to format the agent prompt. */
   task_type?: string;
+  /** Target identified during clarify; passed through to deliverable pipelines. */
+  detected_target?: { name: string; ticker?: string } | null;
   /** Skip clarify regardless. Used for plain chat queries the caller knows are not deliverable-driven. */
   skip_clarify?: boolean;
 }
@@ -89,6 +91,7 @@ export async function POST(request: NextRequest) {
           for await (const event of runLBOPipeline({
             query,
             scope: (body.scope as LBOScope) ?? {},
+            detectedTarget: body.detected_target ?? null,
           })) {
             if (event.type === 'progress') emit({ type: 'tool_result', name: 'lbo_pipeline', summary: event.step ?? '' });
             else if (event.type === 'inputs_resolved') emit({ type: 'tool_result', name: 'lbo_pipeline', summary: `Inputs resolved: entry ${event.inputs?.entryEV}M, leverage ${event.inputs?.leverageMultiple}x, hold ${event.inputs?.holdPeriod}y, exit ${event.inputs?.exitMultiple}x` });

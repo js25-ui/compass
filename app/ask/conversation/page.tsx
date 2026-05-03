@@ -144,6 +144,7 @@ function ConversationView() {
     question: string;
     scope?: Record<string, string | number | boolean | string[]>;
     taskType?: string;
+    detectedTarget?: { name: string; ticker?: string } | null;
     showAsUserTurn?: boolean;     // false when re-submitting after clarification
   }
 
@@ -186,6 +187,7 @@ function ConversationView() {
           query: trimmed,
           ...(opts.scope ? { scope: opts.scope } : {}),
           ...(opts.taskType ? { task_type: opts.taskType } : {}),
+          ...(opts.detectedTarget ? { detected_target: opts.detectedTarget } : {}),
         }),
       });
       if (!res.body) throw new Error('No response stream');
@@ -313,6 +315,7 @@ function ConversationView() {
       question: turn.clarification.originalQuery,
       scope: answers,
       taskType: turn.clarification.taskType,
+      detectedTarget: turn.clarification.detectedTarget,
       showAsUserTurn: false,
     });
   };

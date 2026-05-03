@@ -88,11 +88,15 @@ export async function* runLBOPipeline(opts: {
 }
 
 function extractTargetFromQuery(q: string): string | null {
-  // Cheap heuristic — try patterns like "of <X>" or "<X> at $..." or "<X> LBO"
-  const ofMatch = q.match(/(?:of|on|for)\s+([A-Z][\w&.\-]+(?:\s+[A-Z][\w&.\-]+){0,3})/);
+  // Prefer "of X" or "<X> LBO/take-private" — those name the target. Avoid "for X"
+  // because "X-style", "for sponsor archetypes" comes up there ("for Blackstone-style").
+  const ofMatch = q.match(/\bof\s+([A-Z][\w&.\-]+(?:\s+[A-Z][\w&.\-]+){0,3})/);
   if (ofMatch) return ofMatch[1];
-  const lboMatch = q.match(/([A-Z][\w&.\-]+(?:\s+[A-Z][\w&.\-]+){0,3})\s+(?:LBO|take[- ]private|buyout)/i);
+  const lboMatch = q.match(/([A-Z][\w&.\-]+(?:\s+[A-Z][\w&.\-]+){0,3})\s+(?:LBO|take[- ]private|buyout|acquisition)/i);
   if (lboMatch) return lboMatch[1];
+  // "<X> at $..." pattern
+  const atMatch = q.match(/([A-Z][\w&.\-]+(?:\s+[A-Z][\w&.\-]+){0,3})\s+at\s+\$/);
+  if (atMatch) return atMatch[1];
   return null;
 }
 
