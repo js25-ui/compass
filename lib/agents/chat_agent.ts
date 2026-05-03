@@ -165,14 +165,27 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     yield { type: 'thinking' };
 
-    // The LAST turn forces a final answer — tool_choice='none' tells Sonnet
-    // it cannot call tools this turn but the tool definitions stay in the
-    // request (required because prior turns in `messages` reference tool_use
-    // blocks; dropping `tools` causes Anthropic to return empty content).
+    // The LAST turn forces a final answer. Two concrete things must happen:
+    //   1. Inject a synthetic "now write the answer" user message — without
+    //      it, Sonnet sees the prior tool_result as a dead-end conversation
+    //      and emits a stop with empty content.
+    //   2. tool_choice='none' tells Sonnet not to request more tools.
+    // We keep `tools` in the request because prior assistant messages
+    // contain tool_use blocks; dropping `tools` makes the request invalid.
     const isLastTurn = turn === MAX_TURNS - 1;
     const turnSystem = isLastTurn
-      ? `${SYSTEM_PROMPT}\n\nFINAL TURN: You have exhausted your tool budget. Write the final answer now using the tool results already in this conversation. Acknowledge any data gaps explicitly. You are not allowed to call any tools on this turn.`
+      ? `${SYSTEM_PROMPT}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
       : SYSTEM_PROMPT;
+
+    const turnMessages: Anthropic.Messages.MessageParam[] = isLastTurn
+      ? [
+          ...messages,
+          {
+            role: 'user',
+            content: 'Now write the final answer to my original question using the data you already retrieved. If the question asked for a model, deliverable, or capability Compass does not have, acknowledge that in the first sentence and provide the best sourced narrative you can. Use [N] inline citations matching the chunk numbers from your search results. Output HTML (paragraphs, <strong>, <a class="chat-citation" href="#source-N">N</a>). Do not call any more tools.',
+          },
+        ]
+      : messages;
 
     let response: Anthropic.Messages.Message;
     try {
@@ -182,7 +195,7 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
         system: [{ type: 'text', text: turnSystem, cache_control: { type: 'ephemeral' } }],
         tools: TOOLS as unknown as Anthropic.Messages.Tool[],
         ...(isLastTurn ? { tool_choice: { type: 'none' as const } } : {}),
-        messages,
+        messages: turnMessages,
       });
     } catch (err) {
       yield { type: 'error', error: err instanceof Error ? err.message : 'Sonnet call failed' };
