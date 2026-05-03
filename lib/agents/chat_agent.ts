@@ -17,7 +17,7 @@ import {
   type RetrievedChunk,
 } from '@/lib/retrieval/vector_search';
 
-const MAX_TURNS = 5;
+const MAX_TURNS = 3;
 const INGEST_BUDGET_MS = 25_000;
 
 const SYSTEM_PROMPT = `You are Compass, a capital-markets analyst assistant. You help users research companies, deals, securities, and market activity.
@@ -39,17 +39,21 @@ Tools available:
 - list_recent_corpus: see the latest documents added across all entities
 - ingest_entity: pull SEC filings + news for an entity (10-25 seconds; use sparingly)
 
-How to think:
+HARD CONSTRAINTS — what you CANNOT do yet:
+- You do NOT have tools to build financial models. No LBO model. No DCF. No trading comps spreadsheet. No pitch book PPTX. No bond pricing model. No IPO valuation model. The deliverable pipelines are not shipped yet.
+- If the user asks Compass to build a model or generate a deliverable: acknowledge the limitation in the FIRST sentence of your answer in plain language ("Compass's modeling pipeline isn't shipped yet — here's what I can ground from the corpus instead:"), then do at most ONE focused search_corpus call (or skip if the entity is already cached), and produce a narrative summary about what the corpus says about the entity's financials, recent activity, and deal context. Cite real sources.
 
-1. ALWAYS use tools to ground your answer. Don't answer from memory alone — call search_corpus first to see what the corpus actually contains.
+How to think — TIGHT BUDGET (3 tool turns max):
 
-2. If the query is about a specific company/security/topic, search_corpus with descriptive natural language. If retrieval is empty and the entity is identifiable, call ingest_entity then search again.
+1. ALWAYS use tools to ground your answer. Don't answer from memory alone — call search_corpus first to see what the corpus actually contains. But COMMIT TO AN ANSWER FAST: total tool calls across the conversation must stay under 4. After each tool result, ask yourself: "Do I have enough to write a useful sourced answer?" If yes, stop calling tools and write.
 
-3. If the query is broad ("what's new in ECM", "muni activity"): interpret it (ECM = equity capital markets — IPOs, follow-ons, secondaries). Call list_indexed_entities OR list_recent_corpus to see what's covered, then search_corpus with the right terms. If a representative issuer would help and isn't covered, ingest it.
+2. If the query is about a specific company/security/topic: ONE search_corpus call. If retrieval is empty AND the entity is identifiable, ONE ingest_entity call, then ONE final search_corpus call. Then answer. That's the budget.
+
+3. If the query is broad ("what's new in ECM", "muni activity"): interpret it directly (ECM = equity capital markets — IPOs, follow-ons, secondaries). Call list_recent_corpus once OR search_corpus once with the right terms. Then answer.
 
 4. If the query is genuinely ambiguous ("compare to comps" with no anchor; "the deal" with no antecedent): ask ONE specific clarifying question. Don't bounce the user when the question is broad-but-answerable.
 
-5. After your tool calls, write the final answer.
+5. After your tool calls — and AT MOST after 2-3 tool calls regardless of what you've found — write the final answer. Better to answer with partial data and flag the gap than keep researching forever.
 
 Citation rules — strictly enforced:
 - Every search_corpus result includes a stable citation number "n" — use those in your answer as <a class="chat-citation" href="#source-N">N</a>.
@@ -161,13 +165,21 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     yield { type: 'thinking' };
 
+    // The LAST turn forces a final answer — Sonnet sees no tools, so it MUST
+    // produce a text response from whatever it's already retrieved. Prevents
+    // "ran out of turns and never spoke" silent failures.
+    const isLastTurn = turn === MAX_TURNS - 1;
+    const turnSystem = isLastTurn
+      ? `${SYSTEM_PROMPT}\n\nFINAL TURN: You have used your tool budget. Write the answer now using the search results already in this conversation. Acknowledge any data gaps explicitly. Do not request more tools — none are available this turn.`
+      : SYSTEM_PROMPT;
+
     let response: Anthropic.Messages.Message;
     try {
       response = await client.messages.create({
         model: SONNET_MODEL,
         max_tokens: 2000,
-        system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-        tools: TOOLS as unknown as Anthropic.Messages.Tool[],
+        system: [{ type: 'text', text: turnSystem, cache_control: { type: 'ephemeral' } }],
+        ...(isLastTurn ? {} : { tools: TOOLS as unknown as Anthropic.Messages.Tool[] }),
         messages,
       });
     } catch (err) {

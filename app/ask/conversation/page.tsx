@@ -195,6 +195,8 @@ function ConversationView() {
       let buffer = '';
       let finished = false;
 
+      let sawDone = false;
+      let sawClarification = false;
       while (!finished) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -206,6 +208,8 @@ function ConversationView() {
           let event: ChatEvent;
           try { event = JSON.parse(line) as ChatEvent; } catch { continue; }
           handleEvent(event);
+          if (event.type === 'done') sawDone = true;
+          if (event.type === 'clarification') sawClarification = true;
           if (event.type === 'done' || event.type === 'error') {
             finished = true;
             break;
@@ -213,6 +217,19 @@ function ConversationView() {
         }
       }
       reader.cancel().catch(() => { /* ignore */ });
+
+      // Stream ended without a 'done' or proper answer? Surface that.
+      if (!sawDone && !sawClarification) {
+        updateAssistant(t => {
+          if (t.html || t.error) return t;
+          return {
+            ...t,
+            phase: 'done',
+            error: 'The response was cut off before completing. The query may have hit the function timeout. Try a more focused question or break it into steps.',
+            latencyMs: Date.now() - startedAt,
+          };
+        });
+      }
 
       function handleEvent(event: ChatEvent) {
         const label = activityLabelFor(event);
