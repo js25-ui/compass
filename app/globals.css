@@ -839,8 +839,12 @@ button { font-family: inherit; }
   font-family: inherit; outline: none;
 }
 .clarify-select:focus, .clarify-input:focus { border-color: #4a90e2; }
-.clarify-numeric { display: flex; align-items: center; gap: 8px; }
-.clarify-unit { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+.clarify-numeric { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.clarify-input-numeric { width: 110px; font-variant-numeric: tabular-nums; text-align: right; padding-right: 12px; }
+.clarify-unit { font-size: 11px; color: #ccc; letter-spacing: 0.5px; font-weight: 600; }
+.clarify-range { font-size: 11px; color: #666; font-style: italic; }
+.clarify-hint { font-size: 11px; color: #888; line-height: 1.4; }
+.clarify-warning { font-size: 11px; color: #fbbf24; line-height: 1.4; }
 .clarify-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .clarify-chip {
   background: #141414; border: 1px solid #2a2a2a;

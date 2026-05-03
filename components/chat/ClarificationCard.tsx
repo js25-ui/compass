@@ -75,6 +75,10 @@ export function ClarificationCard({ payload, disabled, onSubmit }: Clarification
               onChange={v => setAnswer(q.id, v)}
               disabled={disabled}
             />
+            {q.hint ? <div className="clarify-hint">{q.hint}</div> : null}
+            {q.kind === 'numeric' && typeof answers[q.id] === 'number' && (q.min !== undefined || q.max !== undefined) && (
+              <RangeWarning value={answers[q.id] as number} min={q.min} max={q.max} unit={q.unit} />
+            )}
           </div>
         ))}
         <div className="clarify-actions">
@@ -142,17 +146,22 @@ function QuestionInput({ question: q, value, onChange, disabled }: QuestionInput
   }
 
   if (q.kind === 'numeric') {
+    const rangeLabel = formatRange(q.min, q.max, q.unit);
     return (
       <div className="clarify-numeric">
         <input
           id={id}
           type="number"
-          className="clarify-input"
+          className="clarify-input clarify-input-numeric"
           value={typeof value === 'number' ? value : Number(value) || 0}
+          step={q.step ?? guessStep(q.unit)}
+          min={q.min}
+          max={q.max}
           onChange={e => onChange(Number(e.target.value))}
           disabled={disabled}
         />
         {q.unit ? <span className="clarify-unit">{q.unit}</span> : null}
+        {rangeLabel ? <span className="clarify-range">{rangeLabel}</span> : null}
       </div>
     );
   }
@@ -181,4 +190,39 @@ function QuestionInput({ question: q, value, onChange, disabled }: QuestionInput
       placeholder={q.unit ?? ''}
     />
   );
+}
+
+interface RangeWarningProps {
+  value: number;
+  min?: number;
+  max?: number;
+  unit?: string;
+}
+
+function RangeWarning({ value, min, max, unit }: RangeWarningProps) {
+  let warning: string | null = null;
+  if (min !== undefined && value < min) warning = `Below typical floor (${min}${unit ? ' ' + unit : ''}). Compass will still run.`;
+  if (max !== undefined && value > max) warning = `Above typical ceiling (${max}${unit ? ' ' + unit : ''}). Compass will still run.`;
+  if (!warning) return null;
+  return <div className="clarify-warning">⚠ {warning}</div>;
+}
+
+function formatRange(min: number | undefined, max: number | undefined, unit: string | undefined): string {
+  if (min === undefined && max === undefined) return '';
+  const u = unit ? ` ${unit}` : '';
+  if (min !== undefined && max !== undefined) return `typical ${min}–${max}${u}`;
+  if (min !== undefined) return `min ${min}${u}`;
+  return `max ${max}${u}`;
+}
+
+function guessStep(unit?: string): number {
+  if (!unit) return 1;
+  const u = unit.toLowerCase();
+  if (u.includes('x ') || u === 'x' || u.endsWith('x')) return 0.25;     // multiples
+  if (u.includes('%')) return 0.25;
+  if (u.includes('bps')) return 5;
+  if (u.includes('$m') || u.includes('$bn')) return 25;
+  if (u.includes('year')) return 1;
+  if (u.includes('month')) return 1;
+  return 1;
 }
