@@ -13,6 +13,7 @@ import { runBondPricingPipeline, type BondPricingScope } from '@/lib/agents/deli
 import { runPrecedentsPipeline, type PrecedentsScope } from '@/lib/agents/deliverables/precedents';
 import { runICMemoPipeline, type ICMemoScope } from '@/lib/agents/deliverables/ic_memo';
 import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/deliverables/pitch_book';
+import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
 import type { DeliverableEvent } from '@/lib/agents/deliverables/shared';
 
 export const runtime = 'nodejs';
@@ -349,7 +350,18 @@ function pickDeliverableGenerator(
       gen: runPitchBookPipeline({ query, scope: scope as PitchBookScope, detectedTarget }),
     };
   }
-  // Precedents shows up as a "task_type" only via direct API; clarify routes it through chat_answer.
+  if (tt === 'precedents') {
+    return {
+      label: 'precedents',
+      gen: runPrecedentsPipeline({ query, scope: scope as PrecedentsScope, detectedTarget }),
+    };
+  }
+  if (tt === 'dcf') {
+    return {
+      label: 'dcf',
+      gen: runDCFPipeline({ query, scope: scope as DCFScope, detectedTarget }),
+    };
+  }
   return null;
 }
 
