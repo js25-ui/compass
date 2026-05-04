@@ -102,12 +102,15 @@ export async function* runLBOPipeline(opts: {
     }
   }
 
-  // Forward-EBITDA underwriting: if entry/trailing-EBITDA is insane AND the
-  // target is high-growth, real PE buyers underwrite to forward EBITDA.
-  // Project 2y forward at historical (or user-stated) CAGR, apply a sector-
-  // sane margin floor, and use that as the LBO base if it makes the multiple
-  // sane. The model then projects from the forward basis.
-  const FORWARD_TRIGGER_MULTIPLE = 25;
+  // Forward-EBITDA underwriting: real PE buyers underwrite to forward EBITDA
+  // only when current EBITDA isn't representative of the underwriting basis —
+  // either the cost structure is still pre-scale (margin <5%) or the entry
+  // multiple is at outright bubble territory (>40x). A healthy 25x trailing
+  // multiple on a 7-15% margin business is just a normal premium LBO and
+  // should be priced as-is.
+  const FORWARD_TRIGGER_MULTIPLE_BUBBLE = 40;       // pure-multiple trigger
+  const FORWARD_TRIGGER_MARGIN_BROKEN = 0.05;       // <5% trailing margin → EBITDA isn't representative
+  const FORWARD_TRIGGER_MULTIPLE_BROKEN_MARGIN = 25; // when margin is broken, even 25x is too high
   const FORWARD_TRIGGER_CAGR = 0.15;
   const trailingMultiple = trailingEbitda != null && trailingEbitda > 0 && opts.scope.entry_ev != null
     ? opts.scope.entry_ev / trailingEbitda
@@ -132,9 +135,14 @@ export async function* runLBOPipeline(opts: {
     trailingMultiple: number;
   } | null = null;
 
+  const marginIsBroken = trailingMargin != null && trailingMargin < FORWARD_TRIGGER_MARGIN_BROKEN;
+  const multipleAtBubble = trailingMultiple != null && trailingMultiple > FORWARD_TRIGGER_MULTIPLE_BUBBLE;
+  const multipleHighWithBrokenMargin = marginIsBroken
+    && trailingMultiple != null
+    && trailingMultiple > FORWARD_TRIGGER_MULTIPLE_BROKEN_MARGIN;
+
   if (
-    trailingMultiple != null &&
-    trailingMultiple > FORWARD_TRIGGER_MULTIPLE &&
+    (multipleAtBubble || multipleHighWithBrokenMargin) &&
     historicalCagr != null &&
     historicalCagr > FORWARD_TRIGGER_CAGR &&
     opts.scope.entry_ev != null
@@ -153,7 +161,7 @@ export async function* runLBOPipeline(opts: {
     const forwardEbitda = forwardRevenue * marginUsed;
     const forwardMultiple = forwardEbitda > 0 ? opts.scope.entry_ev / forwardEbitda : Infinity;
 
-    if (forwardMultiple <= FORWARD_TRIGGER_MULTIPLE && forwardMultiple >= 5) {
+    if (forwardMultiple <= 25 && forwardMultiple >= 5) {
       baseRevenue = forwardRevenue;
       baseEbitdaMargin = marginUsed;
       forwardBasis = {
