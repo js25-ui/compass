@@ -351,6 +351,11 @@ button { font-family: inherit; }
 .chat-msg-content p { margin-bottom: 10px; }
 .chat-msg-content p:last-child { margin-bottom: 0; }
 .chat-msg-content strong { color: #fff; }
+.chat-msg-content .compass-chat-block {
+  white-space: pre-line;
+  margin-bottom: 10px;
+}
+.chat-msg-content .compass-chat-block:last-child { margin-bottom: 0; }
 
 .chat-citation {
   display: inline-flex;

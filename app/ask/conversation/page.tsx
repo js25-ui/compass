@@ -32,6 +32,12 @@ interface DeliverableContext {
   scope: Record<string, string | number | boolean | string[]>;
 }
 
+interface PendingClarification {
+  taskType: string;
+  detectedTarget: { name: string; ticker?: string } | null;
+  partialScope: Record<string, string | number | boolean | string[]>;
+}
+
 interface AssistantTurn {
   id: number;
   role: 'assistant';
@@ -49,6 +55,9 @@ interface AssistantTurn {
     acknowledgedScope: Record<string, string | number | boolean | string[]>;
     resolved?: boolean;
   };
+  /** Set when this turn ended with a conversational LBO ask. The next user
+   *  message is treated as the reply (sent as pending_clarification). */
+  pending?: PendingClarification;
 }
 
 type Turn = UserTurn | AssistantTurn;
@@ -143,6 +152,12 @@ type ChatEvent =
       acknowledged_pills?: Array<{ paramId: string; label: string; source: 'current_prompt' | 'conversation_history' | 'standing_preference' | 'inferred' }>;
     }
   | { type: 'classified'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null }
+  | {
+      type: 'pending_clarification';
+      task_type: string;
+      detected_target: { name: string; ticker?: string } | null;
+      partial_scope: Record<string, string | number | boolean | string[]>;
+    }
   | { type: 'thinking' }
   | { type: 'tool_call'; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; name: string; summary: string }
@@ -194,6 +209,15 @@ function ConversationView() {
         }))
       : undefined;
 
+    // If the IMMEDIATELY-PRIOR assistant turn ended with a conversational LBO ask,
+    // treat the user's input as the reply: send pending_clarification so the
+    // backend extracts against the LBO manifest and merges with partial_scope.
+    // Only the latest assistant turn matters — older pendings are stale.
+    const lastAssistantTurnForPending = !opts.scope
+      ? [...turns].reverse().find((t): t is AssistantTurn => t.role === 'assistant')
+      : undefined;
+    const lastPending = lastAssistantTurnForPending?.pending;
+
     setTurns(prev => {
       const next = [...prev];
       if (opts.showAsUserTurn !== false) {
@@ -228,6 +252,15 @@ function ConversationView() {
           ...(opts.detectedTarget ? { detected_target: opts.detectedTarget } : {}),
           ...(lastDeliverable ? { prior_context: lastDeliverable } : {}),
           ...(recentHistory && recentHistory.length > 0 ? { history: recentHistory } : {}),
+          ...(lastPending
+            ? {
+                pending_clarification: {
+                  task_type: lastPending.taskType,
+                  detected_target: lastPending.detectedTarget,
+                  partial_scope: lastPending.partialScope,
+                },
+              }
+            : {}),
         }),
       });
       if (!res.body) throw new Error('No response stream');
@@ -303,6 +336,16 @@ function ConversationView() {
               taskType: event.task_type,
               detectedTarget: event.detected_target,
               scope: event.scope,
+            },
+          }));
+        }
+        if (event.type === 'pending_clarification') {
+          updateAssistant(t => ({
+            ...t,
+            pending: {
+              taskType: event.task_type,
+              detectedTarget: event.detected_target,
+              partialScope: event.partial_scope,
             },
           }));
         }
