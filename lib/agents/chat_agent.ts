@@ -150,7 +150,25 @@ interface AgentState {
   ingestStartedAt: number;
 }
 
-export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
+export interface ChatAgentHistoryTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+export interface ChatAgentOptions {
+  /** Recent turns from this conversation. Threaded as messages so Sonnet
+   *  has continuity ("the data" = Cava if Cava was just discussed). */
+  history?: ChatAgentHistoryTurn[];
+  /** Most-recent established context — entity + task — that the prior
+   *  conversation was about. Surfaced as a system note so the agent
+   *  doesn't ask "which entity?" when it's already obvious. */
+  priorContext?: {
+    detectedTarget: { name: string; ticker?: string } | null;
+    taskType: string;
+  } | null;
+}
+
+export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}): AsyncGenerator<AgentEvent> {
   const startedAt = Date.now();
   const client = getAnthropic();
   const state: AgentState = {
@@ -159,7 +177,14 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
     ingestStartedAt: 0,
   };
 
+  // Build messages with history. Strip prior assistant HTML to plain text;
+  // skip empty entries.
+  const historyMessages: Anthropic.Messages.MessageParam[] = (opts.history ?? [])
+    .filter(t => t.text && t.text.trim().length > 0)
+    .map(t => ({ role: t.role, content: t.text }));
+
   const messages: Anthropic.Messages.MessageParam[] = [
+    ...historyMessages,
     { role: 'user', content: query },
   ];
 
@@ -174,9 +199,12 @@ export async function* runChatAgent(query: string): AsyncGenerator<AgentEvent> {
     // We keep `tools` in the request because prior assistant messages
     // contain tool_use blocks; dropping `tools` makes the request invalid.
     const isLastTurn = turn === MAX_TURNS - 1;
+    const priorContextNote = opts.priorContext?.detectedTarget?.name
+      ? `\n\nPRIOR CONVERSATION CONTEXT: This conversation has been about ${opts.priorContext.detectedTarget.name}${opts.priorContext.detectedTarget.ticker ? ` (${opts.priorContext.detectedTarget.ticker})` : ''}, task=${opts.priorContext.taskType}. When the user's current message is ambiguous about the target ("the data", "their financials", "is there 2025 data"), assume they mean ${opts.priorContext.detectedTarget.name} unless they explicitly name a different entity.`
+      : '';
     const turnSystem = isLastTurn
-      ? `${SYSTEM_PROMPT}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
-      : SYSTEM_PROMPT;
+      ? `${SYSTEM_PROMPT}${priorContextNote}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
+      : `${SYSTEM_PROMPT}${priorContextNote}`;
 
     const turnMessages: Anthropic.Messages.MessageParam[] = isLastTurn
       ? [

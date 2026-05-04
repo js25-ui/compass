@@ -192,7 +192,15 @@ export async function POST(request: NextRequest) {
           ? buildScopedQuery(query, body.scope!, body.task_type)
           : query;
 
-        for await (const event of runChatAgent(agentInput)) {
+        for await (const event of runChatAgent(agentInput, {
+          history: body.history,
+          priorContext: body.prior_context
+            ? {
+                detectedTarget: body.prior_context.detected_target,
+                taskType: body.prior_context.task_type,
+              }
+            : null,
+        })) {
           emit(event);
         }
       } catch (err) {
