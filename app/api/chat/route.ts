@@ -134,7 +134,10 @@ export async function POST(request: NextRequest) {
           emit({ type: 'clarifying' });
           let scope: ClarifyOutput | null = null;
           try {
-            scope = await clarifyScope(query);
+            scope = await clarifyScope(query, {
+              history: body.history,
+              priorContext: body.prior_context ?? null,
+            });
           } catch (err) {
             emit({ type: 'clarify_error', error: err instanceof Error ? err.message : 'clarify failed' });
           }

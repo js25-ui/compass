@@ -93,19 +93,39 @@ export interface ClarifyHistoryTurn {
   text: string;
 }
 
+export interface ClarifyContext {
+  history?: ClarifyHistoryTurn[];
+  priorContext?: {
+    task_type: string;
+    detected_target: { name: string; ticker?: string } | null;
+    scope: Record<string, string | number | boolean | string[]>;
+  } | null;
+}
+
 export async function clarifyScope(
   query: string,
-  history?: ClarifyHistoryTurn[],
+  ctx: ClarifyContext = {},
 ): Promise<ClarifyOutput> {
-  // 1. Classify (Haiku — fast)
-  const classification = await classifyTask(query);
+  const history = ctx.history;
+  const priorContext = ctx.priorContext;
+
+  // 1. Classify (Haiku — fast). History is given as a hint so the model
+  //    can resolve "it" / "the same" / "this company" to a prior target.
+  const classification = await classifyTask(query, history, priorContext);
+
+  // Entity inheritance: if classify returned no target and prior conversation
+  // established one, carry it forward unless the query explicitly names a new one.
+  let resolvedTarget = classification.detected_target;
+  if (!resolvedTarget && priorContext?.detected_target) {
+    resolvedTarget = priorContext.detected_target;
+  }
 
   // For chat_answer, no scoping needed.
   if (classification.task_type === 'chat_answer') {
     return {
       task_type: 'chat_answer',
       asset_class: classification.asset_class,
-      detected_target: classification.detected_target,
+      detected_target: resolvedTarget,
       ready_to_proceed: true,
       preface: '',
       questions: [],
@@ -117,12 +137,38 @@ export async function clarifyScope(
   // 2. Load manifest
   const manifest = manifestFor(classification.task_type);
 
-  // 3. Extract parameters (Sonnet)
+  // 3. Extract parameters (Sonnet) — history is THE thing that prevents us
+  //    from re-asking what the user already said earlier in the conversation.
   let extraction: ExtractionResult = { extracted: [], ambiguous: [], inferredContext: {} };
   try {
     extraction = await extractParameters({ query, manifest, history });
   } catch {
     // Fall through: no extraction, ask for everything
+  }
+
+  // Carry forward any prior-task scope params that share an id with the new
+  // task's manifest. Same-named params (hold_period, leverage_multiple, etc.)
+  // ARE the user's standing preferences — don't make them re-state.
+  if (priorContext?.scope) {
+    const manifestParamIds = new Set([
+      ...manifest.required.map(p => p.id),
+      ...manifest.recommended.map(p => p.id),
+      ...manifest.optional.map(p => p.id),
+    ]);
+    const alreadyExtractedIds = new Set(extraction.extracted.map(e => e.paramId));
+    for (const [paramId, value] of Object.entries(priorContext.scope)) {
+      if (!manifestParamIds.has(paramId)) continue;
+      if (alreadyExtractedIds.has(paramId)) continue;          // current prompt wins
+      // Only carry forward simple value types
+      if (value === null || value === undefined) continue;
+      extraction.extracted.push({
+        paramId,
+        value: value as string | number | boolean | string[],
+        source: 'conversation_history',
+        confidence: 0.85,
+        originalText: '(carried from prior turn)',
+      });
+    }
   }
 
   // 4. Determine which manifest params still need to be asked.
@@ -148,7 +194,7 @@ export async function clarifyScope(
   return {
     task_type: classification.task_type,
     asset_class: classification.asset_class,
-    detected_target: classification.detected_target,
+    detected_target: resolvedTarget,
     ready_to_proceed: readyToProceed,
     preface,
     questions,
@@ -157,13 +203,36 @@ export async function clarifyScope(
   };
 }
 
-async function classifyTask(query: string): Promise<ClassifyOutput> {
+async function classifyTask(
+  query: string,
+  history?: ClarifyHistoryTurn[],
+  priorContext?: ClarifyContext['priorContext'],
+): Promise<ClassifyOutput> {
   const client = getAnthropic();
+
+  // Build a single user message that surfaces history + prior target so the
+  // classifier can resolve pronoun-style references ("it", "this", "same one").
+  const parts: string[] = [];
+  if (priorContext?.detected_target?.name) {
+    parts.push(
+      `Prior conversation context: most recent target = ${priorContext.detected_target.name}${priorContext.detected_target.ticker ? ` (${priorContext.detected_target.ticker})` : ''}, prior task = ${priorContext.task_type}.`,
+    );
+  }
+  if (history && history.length > 0) {
+    const compact = history
+      .slice(-6)
+      .map(t => `[${t.role}] ${t.text.slice(0, 400)}`)
+      .join('\n');
+    parts.push(`Recent conversation:\n${compact}`);
+  }
+  parts.push(`Current user message: ${query}`);
+  parts.push('Classify the CURRENT message in light of the prior context. If the user uses "it" / "this" / "the same one" / "that target", inherit the prior target verbatim. If they explicitly name a different entity, switch.');
+
   const response = await client.messages.create({
     model: HAIKU_MODEL,
     max_tokens: 300,
     system: [{ type: 'text', text: CLASSIFY_PROMPT, cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content: query }],
+    messages: [{ role: 'user', content: parts.join('\n\n') }],
   });
   const text = response.content
     .filter(b => b.type === 'text')
