@@ -24,7 +24,7 @@ export interface ModelDataManifest {
 export const LBO_MANIFEST: ModelDataManifest = {
   modelType: 'lbo',
   required: [
-    { metric: 'revenue',          period: 'annual_latest', description: 'Most recent annual revenue' },
+    { metric: 'revenue',          period: 'annual_history_3', description: 'Recent annual revenue history — latest is the base year, history powers forward-EBITDA underwriting for high-growth targets' },
     { metric: 'ebitda',           period: 'annual_latest', description: 'Most recent annual EBITDA (operating income proxy when D&A not broken out)' },
   ],
   optional: [

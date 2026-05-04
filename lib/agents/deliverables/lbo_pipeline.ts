@@ -21,6 +21,8 @@ export interface LBOScope {
   ebitda_margin?: number;
   cost_of_debt?: number;
   capex_pct_revenue?: number;
+  margin_trajectory?: 'flat' | 'expansion' | 'compression';
+  exit_route?: string;
 }
 
 export interface LBOPipelineEvent {
@@ -82,14 +84,98 @@ export async function* runLBOPipeline(opts: {
   };
 
   // ---------- Build LBO inputs from real facts + user scope ----------
-  const initialRevenue = pre.scalar.revenue;
-  const ebitda = pre.scalar.ebitda ?? null;
-  const ebitdaMargin =
+  const trailingRevenue = pre.scalar.revenue;
+  const trailingEbitda = pre.scalar.ebitda ?? null;
+  const trailingMargin = trailingEbitda != null && trailingRevenue > 0
+    ? trailingEbitda / trailingRevenue
+    : null;
+
+  // Historical revenue CAGR (drives the high-growth detection below).
+  const revHistory = pre.history.revenue ?? [];
+  let historicalCagr: number | null = null;
+  if (revHistory.length >= 2) {
+    const latest = revHistory[0]?.value ?? null;
+    const oldest = revHistory[revHistory.length - 1]?.value ?? null;
+    if (latest != null && oldest != null && oldest > 0) {
+      const yearsSpan = revHistory.length - 1;
+      historicalCagr = Math.pow(latest / oldest, 1 / yearsSpan) - 1;
+    }
+  }
+
+  // Forward-EBITDA underwriting: if entry/trailing-EBITDA is insane AND the
+  // target is high-growth, real PE buyers underwrite to forward EBITDA.
+  // Project 2y forward at historical (or user-stated) CAGR, apply a sector-
+  // sane margin floor, and use that as the LBO base if it makes the multiple
+  // sane. The model then projects from the forward basis.
+  const FORWARD_TRIGGER_MULTIPLE = 25;
+  const FORWARD_TRIGGER_CAGR = 0.15;
+  const trailingMultiple = trailingEbitda != null && trailingEbitda > 0 && opts.scope.entry_ev != null
+    ? opts.scope.entry_ev / trailingEbitda
+    : null;
+
+  let baseRevenue = trailingRevenue;
+  let baseEbitdaMargin =
     opts.scope.ebitda_margin != null
       ? normalizePercent(opts.scope.ebitda_margin)
-      : ebitda != null && initialRevenue > 0
-        ? Math.max(0.05, Math.min(0.65, ebitda / initialRevenue))
+      : trailingMargin != null
+        ? Math.max(0.05, Math.min(0.65, trailingMargin))
         : 0.20;
+  let forwardBasis: {
+    yearsForward: number;
+    cagrUsed: number;
+    marginUsed: number;
+    forwardRevenue: number;
+    forwardEbitda: number;
+    forwardMultiple: number;
+    trailingRevenue: number;
+    trailingEbitda: number | null;
+    trailingMultiple: number;
+  } | null = null;
+
+  if (
+    trailingMultiple != null &&
+    trailingMultiple > FORWARD_TRIGGER_MULTIPLE &&
+    historicalCagr != null &&
+    historicalCagr > FORWARD_TRIGGER_CAGR &&
+    opts.scope.entry_ev != null
+  ) {
+    const yearsForward = 2;
+    const cagrUsed = opts.scope.revenue_cagr != null
+      ? normalizePercent(opts.scope.revenue_cagr)
+      : historicalCagr;
+    // Margin floor: 'expansion' trajectory implies the buyer expects margin
+    // recovery toward sector norms; otherwise assume modest improvement.
+    const isExpansion = opts.scope.margin_trajectory === 'expansion';
+    const marginFloor = isExpansion ? 0.15 : 0.10;
+    const marginUsed = Math.max(trailingMargin ?? 0, marginFloor);
+
+    const forwardRevenue = trailingRevenue * Math.pow(1 + cagrUsed, yearsForward);
+    const forwardEbitda = forwardRevenue * marginUsed;
+    const forwardMultiple = forwardEbitda > 0 ? opts.scope.entry_ev / forwardEbitda : Infinity;
+
+    if (forwardMultiple <= FORWARD_TRIGGER_MULTIPLE && forwardMultiple >= 5) {
+      baseRevenue = forwardRevenue;
+      baseEbitdaMargin = marginUsed;
+      forwardBasis = {
+        yearsForward,
+        cagrUsed,
+        marginUsed,
+        forwardRevenue,
+        forwardEbitda,
+        forwardMultiple,
+        trailingRevenue,
+        trailingEbitda,
+        trailingMultiple,
+      };
+      yield {
+        type: 'progress',
+        step: `High entry / trailing-EBITDA (${trailingMultiple.toFixed(0)}x) + ${(historicalCagr * 100).toFixed(0)}% historical CAGR → switching to forward-${yearsForward}y EBITDA basis (${forwardMultiple.toFixed(1)}x).`,
+      };
+    }
+  }
+
+  const initialRevenue = baseRevenue;
+  const ebitdaMargin = baseEbitdaMargin;
 
   const ltdHistory = pre.history.long_term_debt ?? [];
   const _existingDebt = ltdHistory[0]?.value ?? 0;     // reserved for refinement; not yet wired into LBO calc
@@ -163,8 +249,20 @@ export async function* runLBOPipeline(opts: {
   if (sources.length) yield { type: 'sources', sources };
 
   yield { type: 'progress', step: 'Rendering deliverable…' };
-  yield { type: 'token', text: renderLBOHtml(pre.entity.name, inputs, result, issues) };
+  yield { type: 'token', text: renderLBOHtml(pre.entity.name, inputs, result, issues, forwardBasis) };
   yield { type: 'done' };
+}
+
+interface ForwardBasis {
+  yearsForward: number;
+  cagrUsed: number;
+  marginUsed: number;
+  forwardRevenue: number;
+  forwardEbitda: number;
+  forwardMultiple: number;
+  trailingRevenue: number;
+  trailingEbitda: number | null;
+  trailingMultiple: number;
 }
 
 function toFactArray(v: unknown): import('@/lib/data/financial_facts').FinancialFact[] {
@@ -245,6 +343,7 @@ function renderLBOHtml(
   inputs: LBOInputs,
   result: LBOResult,
   issues: ValidationIssue[],
+  forwardBasis: ForwardBasis | null,
 ): string {
   const su = result.sourcesUses;
   const ret = result.returns;
@@ -268,8 +367,15 @@ function renderLBOHtml(
         ? `Returns fall below standard sponsor hurdle: <strong>${formatPct(ret.irrPct)} IRR / ${ret.moic.toFixed(2)}x MOIC</strong>.`
         : `Returns negative under these inputs: <strong>${formatPct(ret.irrPct)} IRR / ${ret.moic.toFixed(2)}x MOIC</strong>. The deal does not work as structured.`;
 
+  const forwardBanner = forwardBasis === null
+    ? ''
+    : `<div class="memo-data-note" style="border-left-color:#60a5fa">
+        <strong>Underwriting basis: forward EBITDA</strong> — entry EV implies <strong>${forwardBasis.trailingMultiple.toFixed(0)}x trailing EBITDA</strong> (${formatMillions(forwardBasis.trailingEbitda ?? 0)}), outside the standard LBO range. With a ${(forwardBasis.cagrUsed * 100).toFixed(0)}% revenue CAGR projected over ${forwardBasis.yearsForward}y at a ${(forwardBasis.marginUsed * 100).toFixed(0)}% EBITDA margin, forward EBITDA reaches ${formatMillions(forwardBasis.forwardEbitda)} → entry becomes <strong>${forwardBasis.forwardMultiple.toFixed(1)}x forward EBITDA</strong>. Model projects from this Year-${forwardBasis.yearsForward} forward base.
+      </div>`;
+
   return [
     `<p><strong>${escape(targetName)} LBO · ${formatMillions(ins.entryEV)} entry EV · ${formatMultiple(ins.leverageMultiple)} leverage · ${ins.holdPeriod}Y hold</strong></p>`,
+    forwardBanner,
     `<p>${verdict}</p>`,
     warnBlock,
     section('Sources & Uses'),
