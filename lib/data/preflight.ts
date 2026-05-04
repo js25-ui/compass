@@ -14,6 +14,7 @@ import {
   type FactMetric,
   type FinancialFact,
 } from './financial_facts';
+import { upsertTarget } from '@/lib/ingest/persist';
 import type { ManifestEntry, ModelDataManifest } from '@/lib/models/manifests';
 
 export interface PreflightFailure {
@@ -62,7 +63,17 @@ export async function preflight(opts: {
   attempted.push('financial_facts_cache');
 
   // Step 3 — if cache is sparse and we have a CIK, prime from XBRL.
+  // financial_facts has a FK to targets(id), so the target row must exist
+  // before we seed. Entities resolved purely from the SEC tickers JSON or
+  // curated lists never get an ingestion pass; persist the row first so
+  // the upsert doesn't violate the FK.
   if (entity.cik && needsRefresh(opts.manifest, facts)) {
+    try {
+      await upsertTarget(entity, 'pending');
+      attempted.push('target_persisted');
+    } catch (err) {
+      attempted.push(`target_persist_failed(${err instanceof Error ? err.message : 'unknown'})`);
+    }
     try {
       const written = await seedFromXbrl(entity.id, entity.cik);
       attempted.push(`xbrl_seed(${written}_facts)`);
