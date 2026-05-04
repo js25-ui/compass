@@ -236,7 +236,7 @@ function renderValidationFailureHtml(targetName: string, inputs: LBOInputs, issu
         </li>`,
       )
       .join('')}</ul>`,
-    `<p class="memo-disclaimer">Re-open the scope card from the chat and revise the flagged inputs, or let Compass infer entry EV from base-year financials by leaving "$X EV" out of your prompt.</p>`,
+    `<p class="memo-disclaimer">Reply with the revised inputs (e.g. "actually $11B EV" or "use $50M EBITDA"), or drop the EV from your prompt and let Compass infer it from base-year financials.</p>`,
   ].join('\n');
 }
 
