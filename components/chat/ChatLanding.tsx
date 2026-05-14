@@ -27,7 +27,7 @@ export function ChatLanding() {
   const send = () => {
     const q = value.trim();
     if (!q) return;
-    router.push(`/ask/conversation?q=${encodeURIComponent(q)}`);
+    router.push(`/chat/conversation?q=${encodeURIComponent(q)}`);
   };
 
   return (

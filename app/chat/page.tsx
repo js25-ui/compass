@@ -1,5 +1,5 @@
 import { ChatLanding } from '@/components/chat/ChatLanding';
 
-export default function AskPage() {
+export default function ChatPage() {
   return <ChatLanding />;
 }

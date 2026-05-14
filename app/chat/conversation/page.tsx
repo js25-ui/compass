@@ -434,7 +434,8 @@ function ConversationView() {
         </div>
         <div className="ask-context-right">
           <span className="accuracy">Sonnet 4.5 · Voyage · pgvector</span>
-          <Link href="/ask" className="new-chat-btn">+ New Chat</Link>
+          <Link href="/work" className="new-chat-btn" style={{ marginRight: 8 }}>View work →</Link>
+          <Link href="/chat" className="new-chat-btn">+ New Chat</Link>
         </div>
       </div>
 

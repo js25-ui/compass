@@ -3,28 +3,31 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+const TABS: Array<{ href: string; label: string; icon: string }> = [
+  { href: '/chat', label: 'Chat', icon: '✦' },
+  { href: '/work', label: 'Work', icon: '◫' },
+  { href: '/library', label: 'Library', icon: '▤' },
+];
+
 export function TopNav() {
   const pathname = usePathname();
-  const isWorkstation = pathname.startsWith('/workstation');
-  const isAsk = !isWorkstation;
-
   return (
     <div className="topbar">
       <div className="topbar-left">
-        <Link href="/ask" className="logo">
+        <Link href="/chat" className="logo">
           <div className="logo-mark" />
           <div className="logo-text">COMPASS</div>
         </Link>
         <nav className="global-nav">
-          <Link href="/workstation" className={`global-tab${isWorkstation ? ' active' : ''}`}>
-            <span className="global-tab-icon">▦</span>
-            <span>Workstation</span>
-          </Link>
-          <Link href="/ask" className={`global-tab${isAsk ? ' active' : ''}`}>
-            <span className="global-tab-icon">✦</span>
-            <span>Ask Compass</span>
-            <span className="ask-badge">RAG</span>
-          </Link>
+          {TABS.map(t => {
+            const active = pathname === t.href || pathname.startsWith(t.href + '/');
+            return (
+              <Link key={t.href} href={t.href} className={`global-tab${active ? ' active' : ''}`}>
+                <span className="global-tab-icon">{t.icon}</span>
+                <span>{t.label}</span>
+              </Link>
+            );
+          })}
         </nav>
       </div>
       <div className="topbar-right">

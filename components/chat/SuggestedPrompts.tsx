@@ -45,7 +45,7 @@ export function SuggestedPrompts() {
   const router = useRouter();
 
   const send = (prompt: string) => {
-    router.push(`/ask/conversation?q=${encodeURIComponent(prompt)}`);
+    router.push(`/chat/conversation?q=${encodeURIComponent(prompt)}`);
   };
 
   return (
