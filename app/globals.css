@@ -1286,6 +1286,41 @@ button { font-family: inherit; }
 .conf-med  { background: #261a0a; color: #fbbf24; border: 1px solid #3a2a10; }
 .conf-low  { background: #260d0d; color: #f87171; border: 1px solid #3a1a1a; }
 
+.hallucination-banner {
+  background: #1a0a0a;
+  border-left: 2px solid #f87171;
+  padding: 12px 16px;
+  margin: 16px 0;
+  font-size: 12px;
+  color: #fca5a5;
+}
+.hallucination-banner-headline {
+  font-weight: 600;
+  color: #f87171;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+.hallucination-banner ul {
+  margin: 0 0 8px 16px;
+  padding: 0;
+}
+.hallucination-banner li {
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+.hallucination-banner code {
+  background: #260d0d;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #fca5a5;
+}
+.hallucination-banner-foot {
+  color: #c87171;
+  font-size: 11px;
+  font-style: italic;
+}
+
 .work-activity {
   list-style: none;
   padding: 0;

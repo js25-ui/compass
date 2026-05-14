@@ -17,6 +17,7 @@ import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
 import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
 import { computeConfidence } from '@/lib/agents/deliverables/confidence';
 import { auditCitations } from '@/lib/agents/deliverables/citation_audit';
+import { scanNumericLeaks } from '@/lib/agents/deliverables/numeric_gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -279,13 +280,21 @@ export async function POST(request: NextRequest) {
           };
           for await (const event of deliverable.gen) {
             relayDeliverableEvent(event, deliverable.label, emit);
-            const ev = event as { type: string; inputs?: unknown; sources?: unknown };
+            const ev = event as { type: string; inputs?: unknown; sources?: unknown; text?: string };
             if (ev.type === 'inputs_traced' && Array.isArray(ev.inputs)) {
               buffered.inputs = ev.inputs as InputTrace[];
               tryEmitAudit();
             } else if (ev.type === 'sources' && Array.isArray(ev.sources)) {
               buffered.sources = ev.sources as Array<{ n: number; title: string; url: string | null; meta: string }>;
               tryEmitAudit();
+            } else if (ev.type === 'token' && typeof ev.text === 'string') {
+              // Numeric sanity gate — never let NaN / Infinity / undefined
+              // leak into the deliverable as a "fact". This is the last
+              // line of defense after preflight + validators + model guards.
+              const leaks = scanNumericLeaks(ev.text);
+              if (leaks.length > 0) {
+                emit({ type: 'hallucination_gate', deliverable: deliverable.label, leaks });
+              }
             }
           }
           return;

@@ -57,6 +57,7 @@ interface AssistantTurn {
   calcSteps?: Array<{ step: string; expr: string; value: string }>;
   confidence?: { score: number; breakdown: Array<{ factor: string; weight: number; value: number; note: string }> };
   citationAccuracy?: { score: number; verified: number; checked: number; failures: Array<{ n: number; reason: string }> };
+  numericLeaks?: Array<{ reason: string; context: string }>;
   /** Original user query that drove this turn (for the Work-tab title). */
   query: string;
   startedAt: number;
@@ -192,6 +193,7 @@ type ChatEvent =
   | { type: 'calc_steps'; deliverable: string; calc: Array<{ step: string; expr: string; value: string }> }
   | { type: 'confidence'; deliverable: string; score: number; breakdown: Array<{ factor: string; weight: number; value: number; note: string }> }
   | { type: 'citation_audit'; deliverable: string; score: number; checked: number; verified: number; failures: Array<{ n: number; reason: string }> }
+  | { type: 'hallucination_gate'; deliverable: string; leaks: Array<{ reason: string; context: string }> }
   | { type: 'token'; text: string }
   | { type: 'usage'; input: number; output: number }
   | { type: 'done'; latencyMs: number; turns?: number }
@@ -410,6 +412,12 @@ function ConversationView() {
             citationAccuracy: { score: event.score, checked: event.checked, verified: event.verified, failures: event.failures },
           }));
         }
+        if (event.type === 'hallucination_gate') {
+          updateAssistant(t => ({
+            ...t,
+            numericLeaks: [...(t.numericLeaks ?? []), ...event.leaks],
+          }));
+        }
         if (event.type === 'clarification') {
           updateAssistant(t => ({
             ...t,
@@ -563,6 +571,17 @@ function ConversationView() {
                       disabled={streaming}
                       onSubmit={answers => handleClarifyAnswer(turn.id, answers)}
                     />
+                  )}
+                  {turn.numericLeaks && turn.numericLeaks.length > 0 && (
+                    <div className="hallucination-banner">
+                      <div className="hallucination-banner-headline">⚠ Numeric output gate flagged {turn.numericLeaks.length} leak{turn.numericLeaks.length === 1 ? '' : 's'}</div>
+                      <ul>
+                        {turn.numericLeaks.slice(0, 3).map((l, i) => (
+                          <li key={i}><strong>{l.reason}</strong> — <code>{l.context}</code></li>
+                        ))}
+                      </ul>
+                      <div className="hallucination-banner-foot">Treat the affected cells with caution. See the Work tab for full audit trail.</div>
+                    </div>
                   )}
                   {(turn.html || turn.error) && (
                     <AssistantMessage
