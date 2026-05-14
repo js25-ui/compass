@@ -123,13 +123,22 @@ export interface InputTrace {
   citationN?: number;     // index into the deliverable's sources[] array, if applicable
 }
 
+/** A single line in a model's "show your work" — the math the user would
+ *  re-derive if they wanted to audit the result. */
+export interface CalcStep {
+  step: string;     // human label, e.g. 'Entry EBITDA'
+  expr: string;     // expression with the actual numbers, e.g. '$4.2B × 16.0%'
+  value: string;    // resulting value, e.g. '$672M'
+}
+
 /** Generic deliverable event shape. */
 export interface DeliverableEvent {
-  type: 'progress' | 'token' | 'sources' | 'inputs_traced' | 'done' | 'error';
+  type: 'progress' | 'token' | 'sources' | 'inputs_traced' | 'calc_steps' | 'done' | 'error';
   step?: string;
   text?: string;
   sources?: Array<{ n: number; title: string; url: string | null; meta: string }>;
   inputs?: InputTrace[];
+  calc?: CalcStep[];
   error?: string;
 }
 

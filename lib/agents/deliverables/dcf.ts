@@ -286,6 +286,24 @@ export async function* runDCFPipeline(opts: {
   }
   yield { type: 'inputs_traced', inputs };
 
+  // Calc-step trail: show the math behind enterprise value so the Work tab
+  // can render the derivation alongside the inputs.
+  const lastProj = projections[projections.length - 1];
+  const sumPv = projections.reduce((acc, p) => acc + p.pvFcf, 0);
+  const calcSteps = [
+    { step: 'Base EBIT margin', expr: `${fmtMillions(baseEbit)} ÷ ${fmtMillions(baseRevenue)}`, value: `${(baseEbitMargin * 100).toFixed(2)}%` },
+    { step: 'Historical revenue CAGR', expr: `(${fmtMillions(baseRevenue)} ÷ ${fmtMillions(oldestRevenue)})^(1/${yearsSpan}) − 1`, value: `${(historicalCagr * 100).toFixed(2)}%` },
+    { step: `Year-${projectionYears} revenue`, expr: `Decay growth from ${(historicalCagr * 100).toFixed(1)}% toward g=${(g * 100).toFixed(1)}%`, value: fmtMillions(lastProj.revenue) },
+    { step: `Year-${projectionYears} FCF`, expr: `EBIT × (1 − tax) − capex`, value: fmtMillions(lastProj.fcf) },
+    { step: 'PV of projection FCFs', expr: `Σ FCF_t ÷ (1+WACC)^t`, value: fmtMillions(sumPv) },
+    terminalMethod === 'gordon_growth'
+      ? { step: 'Terminal value (Gordon)', expr: `${fmtMillions(lastProj.fcf)} × (1+${(g * 100).toFixed(2)}%) ÷ (${(wacc * 100).toFixed(2)}% − ${(g * 100).toFixed(2)}%)`, value: fmtMillions(terminalValue) }
+      : { step: 'Terminal value (Exit ×)', expr: `${fmtMillions(lastProj.ebit)} × ${(exitMultiple ?? 10).toFixed(1)}x`, value: fmtMillions(terminalValue) },
+    { step: 'PV of terminal', expr: `${fmtMillions(terminalValue)} ÷ (1+${(wacc * 100).toFixed(2)}%)^${projectionYears}`, value: fmtMillions(pvTerminal) },
+    { step: 'Enterprise value', expr: `Σ PV(FCF) + PV(TV)`, value: fmtMillions(enterpriseValue) },
+  ];
+  yield { type: 'calc_steps', calc: calcSteps };
+
   yield { type: 'token', text: renderDCFHtml(target, result, pre.entity?.ticker ?? null) };
   yield { type: 'done' };
 }

@@ -54,6 +54,7 @@ interface AssistantTurn {
   html: string;
   sources: ChatSource[];
   inputsTrace?: InputTraceEvent[];
+  calcSteps?: Array<{ step: string; expr: string; value: string }>;
   /** Original user query that drove this turn (for the Work-tab title). */
   query: string;
   startedAt: number;
@@ -186,6 +187,7 @@ type ChatEvent =
   | { type: 'tool_result'; name: string; summary: string }
   | { type: 'sources'; sources: ChatSource[] }
   | { type: 'inputs_traced'; deliverable: string; inputs: InputTraceEvent[] }
+  | { type: 'calc_steps'; deliverable: string; calc: Array<{ step: string; expr: string; value: string }> }
   | { type: 'token'; text: string }
   | { type: 'usage'; input: number; output: number }
   | { type: 'done'; latencyMs: number; turns?: number }
@@ -345,6 +347,9 @@ function ConversationView() {
         }
         if (event.type === 'inputs_traced') {
           updateAssistant(t => ({ ...t, inputsTrace: event.inputs }));
+        }
+        if (event.type === 'calc_steps') {
+          updateAssistant(t => ({ ...t, calcSteps: event.calc }));
         }
         if (event.type === 'clarification') {
           updateAssistant(t => ({
@@ -576,6 +581,7 @@ function writeWorkTrace(turn: AssistantTurn): void {
       activity: turn.timeline,
       sources: turn.sources,
       inputs: turn.inputsTrace,
+      calc: turn.calcSteps,
       error: turn.error,
     };
     localStorage.setItem('compass:lastWorkTrace', JSON.stringify(trace));

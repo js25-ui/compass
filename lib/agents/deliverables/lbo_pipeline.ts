@@ -32,6 +32,7 @@ export interface LBOPipelineEvent {
     | 'validation_failed'
     | 'inputs_resolved'
     | 'inputs_traced'
+    | 'calc_steps'
     | 'model_complete'
     | 'token'
     | 'sources'
@@ -266,6 +267,23 @@ export async function* runLBOPipeline(opts: {
   }
 
   yield { type: 'model_complete', result };
+
+  // ---------- Calc steps (audit trail) ----------
+  const su = result.sourcesUses;
+  const ret = result.returns;
+  const ex = result.exit;
+  const baseEbitda = inputs.initialRevenue * inputs.ebitdaMargin;
+  const calcSteps = [
+    { step: 'Base-year EBITDA', expr: `${formatMillions(inputs.initialRevenue)} × ${(inputs.ebitdaMargin * 100).toFixed(1)}%`, value: formatMillions(baseEbitda) },
+    { step: 'Debt at close', expr: `${formatMultiple(inputs.leverageMultiple)} × ${formatMillions(baseEbitda)}`, value: formatMillions(su.debt) },
+    { step: 'Sponsor equity', expr: `${formatMillions(su.entryEV)} − ${formatMillions(su.debt)}`, value: formatMillions(su.equity) },
+    { step: `Exit EBITDA (Y${ex.exitYear})`, expr: `Revenue Y${ex.exitYear} ${formatMillions(ex.exitRevenue)} × ${(inputs.ebitdaMargin * 100).toFixed(1)}%`, value: formatMillions(ex.exitEBITDA) },
+    { step: 'Exit EV', expr: `${formatMillions(ex.exitEBITDA)} × ${formatMultiple(inputs.exitMultiple)}`, value: formatMillions(ex.exitEV) },
+    { step: 'Equity proceeds', expr: `${formatMillions(ex.exitEV)} − ${formatMillions(ex.exitDebt)} debt remaining`, value: formatMillions(ex.equityProceeds) },
+    { step: 'MOIC', expr: `${formatMillions(ret.exitEquity)} ÷ ${formatMillions(ret.initialEquity)}`, value: `${ret.moic.toFixed(2)}x` },
+    { step: 'IRR', expr: `MOIC^(1/${inputs.holdPeriod}) − 1`, value: formatPct(ret.irrPct) },
+  ];
+  yield { type: 'calc_steps', calc: calcSteps } as unknown as LBOPipelineEvent;
 
   // ---------- Sources ----------
   const sources: Array<{ n: number; title: string; url: string | null; meta: string }> = [];

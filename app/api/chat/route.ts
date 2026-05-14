@@ -378,6 +378,9 @@ function relayDeliverableEvent(event: unknown, label: string, emit: RelayEmit): 
   else if (ev.type === 'inputs_traced') {
     emit({ type: 'inputs_traced', deliverable: label, inputs: ev.inputs });
   }
+  else if (ev.type === 'calc_steps') {
+    emit({ type: 'calc_steps', deliverable: label, calc: (ev as { calc?: unknown }).calc });
+  }
   else if (ev.type === 'sources') {
     emit({ type: 'sources', sources: ev.sources?.map(s => ({ ...s, source: 'compass_internal', docType: label, filedAt: null, isPrimary: false, similarity: 1 })) });
   }
