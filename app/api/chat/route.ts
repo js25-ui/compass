@@ -310,60 +310,57 @@ function pickDeliverableGenerator(
   const scope = (body.scope ?? {}) as Record<string, unknown>;
   const hasScope = Object.keys(scope).length > 0;
   const tt = body.task_type;
+  if (!tt || !hasScope) return null;
 
-  // Task-type names come from the manifest registry now. Both the new
-  // canonical names ('lbo', 'ipo_valuation') and the legacy names
-  // ('lbo_analysis', 'ipo_pricing') are accepted so direct API calls
-  // from earlier consumers don't break silently.
-  if ((tt === 'lbo' || tt === 'lbo_analysis') && hasScope) {
-    return {
-      label: 'lbo_pipeline',
-      gen: runLBOPipeline({ query, scope: scope as LBOScope, detectedTarget }) as unknown as AsyncGenerator<DeliverableEvent, void>,
-    };
+  switch (tt) {
+    case 'lbo':
+    case 'lbo_analysis':
+      return {
+        label: 'lbo_pipeline',
+        gen: runLBOPipeline({ query, scope: scope as LBOScope, detectedTarget }) as unknown as AsyncGenerator<DeliverableEvent, void>,
+      };
+    case 'trading_comps':
+      return { label: 'trading_comps', gen: runTradingCompsPipeline({ query, scope: scope as TradingCompsScope, detectedTarget }) };
+    case 'ipo_valuation':
+    case 'ipo_pricing':
+      return { label: 'ipo_valuation', gen: runIPOValuationPipeline({ query, scope: scope as IPOValuationScope, detectedTarget }) };
+    case 'bond_pricing':
+      return { label: 'bond_pricing', gen: runBondPricingPipeline({ query, scope: scope as BondPricingScope, detectedTarget }) };
+    case 'ic_memo':
+      return { label: 'ic_memo', gen: runICMemoPipeline({ query, scope: scope as ICMemoScope, detectedTarget }) };
+    case 'pitch_book':
+      return { label: 'pitch_book', gen: runPitchBookPipeline({ query, scope: scope as PitchBookScope, detectedTarget }) };
+    case 'precedents':
+      return { label: 'precedents', gen: runPrecedentsPipeline({ query, scope: scope as PrecedentsScope, detectedTarget }) };
+    case 'dcf':
+      return { label: 'dcf', gen: runDCFPipeline({ query, scope: scope as DCFScope, detectedTarget }) };
+    case 'monte_carlo':
+    case 'football_field':
+    case 'excel_model':
+      return { label: tt, gen: unsupportedDeliverable(tt) };
+    default:
+      return null;
   }
-  if (tt === 'trading_comps') {
-    return {
-      label: 'trading_comps',
-      gen: runTradingCompsPipeline({ query, scope: scope as TradingCompsScope, detectedTarget }),
-    };
-  }
-  if (tt === 'ipo_valuation' || tt === 'ipo_pricing') {
-    return {
-      label: 'ipo_valuation',
-      gen: runIPOValuationPipeline({ query, scope: scope as IPOValuationScope, detectedTarget }),
-    };
-  }
-  if (tt === 'bond_pricing') {
-    return {
-      label: 'bond_pricing',
-      gen: runBondPricingPipeline({ query, scope: scope as BondPricingScope, detectedTarget }),
-    };
-  }
-  if (tt === 'ic_memo') {
-    return {
-      label: 'ic_memo',
-      gen: runICMemoPipeline({ query, scope: scope as ICMemoScope, detectedTarget }),
-    };
-  }
-  if (tt === 'pitch_book') {
-    return {
-      label: 'pitch_book',
-      gen: runPitchBookPipeline({ query, scope: scope as PitchBookScope, detectedTarget }),
-    };
-  }
-  if (tt === 'precedents') {
-    return {
-      label: 'precedents',
-      gen: runPrecedentsPipeline({ query, scope: scope as PrecedentsScope, detectedTarget }),
-    };
-  }
-  if (tt === 'dcf') {
-    return {
-      label: 'dcf',
-      gen: runDCFPipeline({ query, scope: scope as DCFScope, detectedTarget }),
-    };
-  }
-  return null;
+}
+
+const UNSUPPORTED_LABELS: Record<string, string> = {
+  monte_carlo: 'Monte Carlo simulation',
+  football_field: 'Football field valuation',
+  excel_model: 'Excel model export',
+};
+
+async function* unsupportedDeliverable(taskType: string): AsyncGenerator<DeliverableEvent, void> {
+  const label = UNSUPPORTED_LABELS[taskType] ?? taskType;
+  yield {
+    type: 'token',
+    text: `<div class="memo-rec-banner" style="border-left-color:#fbbf24">
+      <div class="memo-rec-label" style="color:#fbbf24">DELIVERABLE NOT YET WIRED</div>
+      <div class="memo-rec-headline">${label}</div>
+    </div>
+    <p>Compass recognized this request as a ${label.toLowerCase()}, but the pipeline isn't built yet. Try LBO, DCF, trading comps, precedents, IPO valuation, bond pricing, IC memo, or pitch book.</p>
+    <p class="memo-disclaimer">No fallback model will run — Compass refuses to fabricate results for a deliverable type it hasn't been implemented to handle.</p>`,
+  };
+  yield { type: 'done' };
 }
 
 interface RelayEmit {
