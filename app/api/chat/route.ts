@@ -16,6 +16,7 @@ import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/delivera
 import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
 import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
 import { computeConfidence } from '@/lib/agents/deliverables/confidence';
+import { auditCitations } from '@/lib/agents/deliverables/citation_audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -264,8 +265,28 @@ export async function POST(request: NextRequest) {
             detected_target: body.detected_target ?? null,
             scope: body.scope ?? {},
           });
+          // Buffer the input trace and sources so we can compute citation
+          // accuracy once both have streamed — pipelines emit them in
+          // different orders.
+          const buffered: { inputs?: InputTrace[]; sources?: Array<{ n: number; title: string; url: string | null; meta: string }> } = {};
+          let auditEmitted = false;
+          const tryEmitAudit = () => {
+            if (auditEmitted) return;
+            if (!buffered.inputs || !buffered.sources) return;
+            const audit = auditCitations(buffered.inputs, buffered.sources);
+            emit({ type: 'citation_audit', deliverable: deliverable.label, ...audit });
+            auditEmitted = true;
+          };
           for await (const event of deliverable.gen) {
             relayDeliverableEvent(event, deliverable.label, emit);
+            const ev = event as { type: string; inputs?: unknown; sources?: unknown };
+            if (ev.type === 'inputs_traced' && Array.isArray(ev.inputs)) {
+              buffered.inputs = ev.inputs as InputTrace[];
+              tryEmitAudit();
+            } else if (ev.type === 'sources' && Array.isArray(ev.sources)) {
+              buffered.sources = ev.sources as Array<{ n: number; title: string; url: string | null; meta: string }>;
+              tryEmitAudit();
+            }
           }
           return;
         }

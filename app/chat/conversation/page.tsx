@@ -191,6 +191,7 @@ type ChatEvent =
   | { type: 'inputs_traced'; deliverable: string; inputs: InputTraceEvent[] }
   | { type: 'calc_steps'; deliverable: string; calc: Array<{ step: string; expr: string; value: string }> }
   | { type: 'confidence'; deliverable: string; score: number; breakdown: Array<{ factor: string; weight: number; value: number; note: string }> }
+  | { type: 'citation_audit'; deliverable: string; score: number; checked: number; verified: number; failures: Array<{ n: number; reason: string }> }
   | { type: 'token'; text: string }
   | { type: 'usage'; input: number; output: number }
   | { type: 'done'; latencyMs: number; turns?: number }
@@ -402,6 +403,12 @@ function ConversationView() {
         }
         if (event.type === 'confidence') {
           updateAssistant(t => ({ ...t, confidence: { score: event.score, breakdown: event.breakdown } }));
+        }
+        if (event.type === 'citation_audit') {
+          updateAssistant(t => ({
+            ...t,
+            citationAccuracy: { score: event.score, checked: event.checked, verified: event.verified, failures: event.failures },
+          }));
         }
         if (event.type === 'clarification') {
           updateAssistant(t => ({
@@ -637,6 +644,7 @@ function writeWorkTrace(turn: AssistantTurn): void {
       inputs: turn.inputsTrace,
       calc: turn.calcSteps,
       confidence: turn.confidence,
+      citationAccuracy: turn.citationAccuracy,
       error: turn.error,
     };
     localStorage.setItem('compass:lastWorkTrace', JSON.stringify(trace));
