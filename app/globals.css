@@ -1268,7 +1268,9 @@ button { font-family: inherit; }
 }
 .origin-sourced { background: #0a2620; color: #4ade80; border: 1px solid #1a3a30; }
 .origin-user_assumption { background: #261a0a; color: #fbbf24; border: 1px solid #3a2a10; }
+.origin-model_knowledge { background: #1a0d26; color: #c084fc; border: 1px solid #2a1a3a; }
 .origin-default { background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; }
+.cit-ref { color: #4a90e2; font-weight: 600; margin-left: 4px; }
 
 .work-activity {
   list-style: none;

@@ -369,11 +369,14 @@ interface RelayEmit {
 
 function relayDeliverableEvent(event: unknown, label: string, emit: RelayEmit): void {
   // Accept either DeliverableEvent shape or LBOPipelineEvent shape.
-  const ev = event as { type: string; step?: string; text?: string; sources?: Array<{ n: number; title: string; url: string | null; meta: string }>; error?: string; inputs?: Record<string, unknown> };
+  const ev = event as { type: string; step?: string; text?: string; sources?: Array<{ n: number; title: string; url: string | null; meta: string }>; error?: string; inputs?: Record<string, unknown> | unknown[] };
   if (ev.type === 'progress') emit({ type: 'tool_result', name: label, summary: ev.step ?? '' });
   else if (ev.type === 'inputs_resolved') {
     const i = ev.inputs as { entryEV?: number; leverageMultiple?: number; holdPeriod?: number; exitMultiple?: number } | undefined;
     if (i) emit({ type: 'tool_result', name: label, summary: `Inputs: entry $${i.entryEV}M · ${i.leverageMultiple}x leverage · ${i.holdPeriod}y hold · ${i.exitMultiple}x exit` });
+  }
+  else if (ev.type === 'inputs_traced') {
+    emit({ type: 'inputs_traced', deliverable: label, inputs: ev.inputs });
   }
   else if (ev.type === 'sources') {
     emit({ type: 'sources', sources: ev.sources?.map(s => ({ ...s, source: 'compass_internal', docType: label, filedAt: null, isPrimary: false, similarity: 1 })) });

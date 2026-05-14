@@ -8,6 +8,7 @@
 
 import {
   type DeliverableEvent,
+  type InputTrace,
   escape,
   fmtMillions,
   fmtMultiple,
@@ -141,8 +142,12 @@ export async function* runTradingCompsPipeline(opts: {
   yield { type: 'progress', step: `Selecting peer set for ${pre.entity.name}…` };
 
   const numComps = opts.scope.num_comps ?? 8;
-  const scope = opts.scope.comp_universe_scope ?? 'sector_plus';
-  const metrics = Array.isArray(opts.scope.metrics_focus) ? opts.scope.metrics_focus.join(', ') : 'valuation, growth, profitability';
+  const numCompsUserSpecified = opts.scope.num_comps != null;
+  const universeScope = opts.scope.comp_universe_scope ?? 'sector_plus';
+  const universeUserSpecified = opts.scope.comp_universe_scope != null;
+  const metricsList = Array.isArray(opts.scope.metrics_focus) ? opts.scope.metrics_focus : ['ev_revenue', 'ev_ebitda', 'pe'];
+  const metricsUserSpecified = Array.isArray(opts.scope.metrics_focus) && opts.scope.metrics_focus.length > 0;
+  const metrics = metricsList.join(', ');
 
   const filingsNote = pre.hasFilings
     ? `${pre.entity.name} is an SEC filer (CIK ${pre.entity.cik}); cite filings only when supported.`
@@ -151,9 +156,75 @@ export async function* runTradingCompsPipeline(opts: {
   const userMessage = `Target: ${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}
 ${filingsNote}
 Number of peers: ${numComps}
-Comp universe scope: ${scope}
+Comp universe scope: ${universeScope}
 Metric emphasis: ${metrics}
 Original ask: ${opts.query}`;
+
+  // ----- Sources -----
+  // The target identity is sourced (SEC tickers / curated lists); peer
+  // multiples come from Sonnet's training corpus, not a live market feed,
+  // and we say so explicitly. Emit one source per real anchor so the
+  // citations bucket is non-empty and traceable.
+  const sources: Array<{ n: number; title: string; url: string | null; meta: string }> = [];
+  if (pre.hasFilings && pre.entity.cik) {
+    sources.push({
+      n: 1,
+      title: `${pre.entity.name} SEC EDGAR profile`,
+      url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${pre.entity.cik}`,
+      meta: `Entity identity · CIK ${pre.entity.cik}`,
+    });
+  }
+  sources.push({
+    n: sources.length + 1,
+    title: 'Sonnet 4.5 training corpus',
+    url: null,
+    meta: 'Peer-set selection and multiples · model-grounded, not live market data',
+  });
+  yield { type: 'sources', sources };
+
+  // ----- Input trace -----
+  const targetSourceN = pre.hasFilings ? 1 : undefined;
+  const modelSourceN = pre.hasFilings ? 2 : 1;
+  const inputs: InputTrace[] = [
+    {
+      field: 'target',
+      label: 'Target entity',
+      value: `${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}`,
+      origin: 'sourced',
+      sourceRef: pre.hasFilings ? `SEC EDGAR · CIK ${pre.entity.cik}` : 'Curated entity registry',
+      citationN: targetSourceN,
+    },
+    {
+      field: 'num_comps',
+      label: 'Number of peers',
+      value: String(numComps),
+      origin: numCompsUserSpecified ? 'user_assumption' : 'default',
+      sourceRef: numCompsUserSpecified ? 'Scope card' : 'Manifest default (8)',
+    },
+    {
+      field: 'comp_universe_scope',
+      label: 'Comp universe scope',
+      value: String(universeScope),
+      origin: universeUserSpecified ? 'user_assumption' : 'default',
+      sourceRef: universeUserSpecified ? 'Scope card' : 'Manifest default (sector_plus)',
+    },
+    {
+      field: 'metrics_focus',
+      label: 'Metrics in scope',
+      value: metrics,
+      origin: metricsUserSpecified ? 'user_assumption' : 'default',
+      sourceRef: metricsUserSpecified ? 'Scope card' : 'Manifest default',
+    },
+    {
+      field: 'peer_multiples',
+      label: 'Peer multiples + growth + margin',
+      value: 'See Comps Table',
+      origin: 'model_knowledge',
+      sourceRef: 'Sonnet 4.5 training corpus — no live market feed',
+      citationN: modelSourceN,
+    },
+  ];
+  yield { type: 'inputs_traced', inputs };
 
   yield { type: 'progress', step: 'Gathering multiples and growth metrics…' };
 

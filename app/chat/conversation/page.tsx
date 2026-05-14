@@ -38,12 +38,26 @@ interface PendingClarification {
   partialScope: Record<string, string | number | boolean | string[]>;
 }
 
+interface TimelineEntry {
+  t: number;            // ms since epoch
+  type: string;         // event type from the SSE stream
+  label: string;
+  detail?: string;
+}
+
 interface AssistantTurn {
   id: number;
   role: 'assistant';
   activity: string[];
+  /** Same activity, with timestamps + per-event type, for the Work tab audit trail. */
+  timeline: TimelineEntry[];
   html: string;
   sources: ChatSource[];
+  inputsTrace?: InputTraceEvent[];
+  /** Original user query that drove this turn (for the Work-tab title). */
+  query: string;
+  startedAt: number;
+  finishedAt?: number;
   time: string;
   latencyMs: number;
   phase: 'streaming' | 'done';
@@ -136,6 +150,15 @@ function prettySourceShort(source: string, docType: string): string {
   return source;
 }
 
+interface InputTraceEvent {
+  field: string;
+  label: string;
+  value: string;
+  origin: 'sourced' | 'user_assumption' | 'model_knowledge' | 'default';
+  sourceRef?: string;
+  citationN?: number;
+}
+
 type ChatEvent =
   | { type: 'started'; query: string }
   | { type: 'classified'; task_type: string; asset_class: string; detected_target: { name: string; ticker?: string } | null; acknowledged_pills?: Array<{ paramId: string; label: string; source: 'current_prompt' | 'conversation_history' | 'standing_preference' | 'inferred' }> }
@@ -162,6 +185,7 @@ type ChatEvent =
   | { type: 'tool_call'; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; name: string; summary: string }
   | { type: 'sources'; sources: ChatSource[] }
+  | { type: 'inputs_traced'; deliverable: string; inputs: InputTraceEvent[] }
   | { type: 'token'; text: string }
   | { type: 'usage'; input: number; output: number }
   | { type: 'done'; latencyMs: number; turns?: number }
@@ -227,8 +251,11 @@ function ConversationView() {
         id: assistantId,
         role: 'assistant',
         activity: [],
+        timeline: [],
         html: '',
         sources: [],
+        query: trimmed,
+        startedAt: startedAt,
         time,
         latencyMs: 0,
         phase: 'streaming',
@@ -309,7 +336,15 @@ function ConversationView() {
       function handleEvent(event: ChatEvent) {
         const label = activityLabelFor(event);
         if (label) {
-          updateAssistant(t => ({ ...t, activity: [...t.activity, label] }));
+          const tick: TimelineEntry = { t: Date.now(), type: event.type, label };
+          updateAssistant(t => ({
+            ...t,
+            activity: [...t.activity, label],
+            timeline: [...t.timeline, tick],
+          }));
+        }
+        if (event.type === 'inputs_traced') {
+          updateAssistant(t => ({ ...t, inputsTrace: event.inputs }));
         }
         if (event.type === 'clarification') {
           updateAssistant(t => ({
@@ -359,7 +394,16 @@ function ConversationView() {
           updateAssistant(t => ({ ...t, error: event.error }));
         }
         if (event.type === 'done') {
-          updateAssistant(t => ({ ...t, phase: 'done', latencyMs: event.latencyMs }));
+          updateAssistant(t => {
+            const finished = Date.now();
+            const next: AssistantTurn = { ...t, phase: 'done', finishedAt: finished, latencyMs: event.latencyMs };
+            // Persist a snapshot for the Work tab — only when this turn ran a
+            // deliverable or has substantive trace data worth auditing.
+            if (next.deliverable || next.inputsTrace || next.sources.length > 0 || next.timeline.length > 0) {
+              writeWorkTrace(next);
+            }
+            return next;
+          });
         }
       }
     } catch (err) {
@@ -516,6 +560,28 @@ function ConversationView() {
       </div>
     </div>
   );
+}
+
+function writeWorkTrace(turn: AssistantTurn): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const trace = {
+      turnId: turn.id,
+      startedAt: turn.startedAt,
+      finishedAt: turn.finishedAt ?? Date.now(),
+      query: turn.query,
+      taskType: turn.deliverable?.taskType ?? null,
+      detectedTarget: turn.deliverable?.detectedTarget ?? null,
+      scope: turn.deliverable?.scope ?? {},
+      activity: turn.timeline,
+      sources: turn.sources,
+      inputs: turn.inputsTrace,
+      error: turn.error,
+    };
+    localStorage.setItem('compass:lastWorkTrace', JSON.stringify(trace));
+  } catch {
+    /* localStorage full or unavailable — silently drop */
+  }
 }
 
 function stripHtml(s: string): string {

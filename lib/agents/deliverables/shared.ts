@@ -108,12 +108,28 @@ export function disclaimer(html: string): string {
   return `<p class="memo-disclaimer">${html}</p>`;
 }
 
+/** Origin of a value that fed a model. Used by every numerical pipeline to
+ *  tag each input so the Work tab can show which numbers came from filings,
+ *  which the user chose in the scope card, which fell back to a default, and
+ *  which came from the LLM's training corpus (no live market feed). */
+export type InputOrigin = 'sourced' | 'user_assumption' | 'model_knowledge' | 'default';
+
+export interface InputTrace {
+  field: string;          // pipeline-internal id, e.g. 'entry_ev', 'trailing_revenue'
+  label: string;          // human label, e.g. 'Entry EV'
+  value: string;          // pre-formatted display value, e.g. '$8.5B'
+  origin: InputOrigin;
+  sourceRef?: string;     // human-readable source pointer, e.g. 'SEC 10-K FY2024'
+  citationN?: number;     // index into the deliverable's sources[] array, if applicable
+}
+
 /** Generic deliverable event shape. */
 export interface DeliverableEvent {
-  type: 'progress' | 'token' | 'sources' | 'done' | 'error';
+  type: 'progress' | 'token' | 'sources' | 'inputs_traced' | 'done' | 'error';
   step?: string;
   text?: string;
   sources?: Array<{ n: number; title: string; url: string | null; meta: string }>;
+  inputs?: InputTrace[];
   error?: string;
 }
 

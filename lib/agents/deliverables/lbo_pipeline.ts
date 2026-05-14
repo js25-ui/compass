@@ -31,6 +31,7 @@ export interface LBOPipelineEvent {
     | 'preflight_failed'
     | 'validation_failed'
     | 'inputs_resolved'
+    | 'inputs_traced'
     | 'model_complete'
     | 'token'
     | 'sources'
@@ -222,6 +223,31 @@ export async function* runLBOPipeline(opts: {
   }
 
   yield { type: 'inputs_resolved', inputs };
+
+  // Citation enforcement: tag every model input by origin so the Work tab
+  // can show what's sourced vs user-assumed vs defaulted. Two SEC-EDGAR
+  // anchors are already in `sources` below; reference them by index.
+  const annualRevenueFact = pickAnnualHistory(toFactArray(pre.facts.revenue), 'revenue', 1)[0] ?? null;
+  const sourceRefXbrl = annualRevenueFact
+    ? `SEC EDGAR · XBRL · ${annualRevenueFact.period}`
+    : 'SEC EDGAR · XBRL';
+  const inputTrace: Array<{ field: string; label: string; value: string; origin: 'sourced' | 'user_assumption' | 'model_knowledge' | 'default'; sourceRef?: string; citationN?: number }> = [
+    { field: 'target', label: 'Target entity', value: `${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}`, origin: 'sourced', sourceRef: pre.entity.cik ? `SEC EDGAR · CIK ${pre.entity.cik}` : 'Curated entity', citationN: 1 },
+    { field: 'trailing_revenue', label: 'LTM revenue', value: formatMillions(trailingRevenue), origin: 'sourced', sourceRef: sourceRefXbrl, citationN: 1 },
+    { field: 'trailing_ebitda', label: 'LTM EBITDA', value: trailingEbitda != null ? formatMillions(trailingEbitda) : '—', origin: trailingEbitda != null ? 'sourced' : 'default', sourceRef: trailingEbitda != null ? sourceRefXbrl : 'No EBITDA tag in filings', citationN: trailingEbitda != null ? 1 : undefined },
+    { field: 'trailing_margin', label: 'Trailing EBITDA margin', value: trailingMargin != null ? `${(trailingMargin * 100).toFixed(1)}%` : '—', origin: trailingMargin != null ? 'sourced' : 'default', sourceRef: trailingMargin != null ? `Derived: EBITDA ÷ revenue (${sourceRefXbrl})` : 'Defaulted to 20%', citationN: trailingMargin != null ? 1 : undefined },
+    { field: 'entry_ev', label: 'Entry EV', value: formatMillions(inputs.entryEV), origin: 'user_assumption', sourceRef: 'Scope card' },
+    { field: 'leverage_multiple', label: 'Leverage multiple', value: `${inputs.leverageMultiple.toFixed(2)}x`, origin: opts.scope.leverage_multiple != null ? 'user_assumption' : 'default', sourceRef: opts.scope.leverage_multiple != null ? 'Scope card' : 'Manifest default (5.0x)' },
+    { field: 'revenue_cagr', label: 'Revenue CAGR', value: `${(inputs.revenueCAGR * 100).toFixed(1)}%`, origin: opts.scope.revenue_cagr != null ? 'user_assumption' : 'default', sourceRef: opts.scope.revenue_cagr != null ? 'Scope card' : 'Manifest default (20%)' },
+    { field: 'ebitda_margin', label: 'Modeled EBITDA margin', value: `${(inputs.ebitdaMargin * 100).toFixed(1)}%`, origin: opts.scope.ebitda_margin != null ? 'user_assumption' : trailingMargin != null ? 'sourced' : 'default', sourceRef: opts.scope.ebitda_margin != null ? 'Scope card' : trailingMargin != null ? `Derived from filings (${sourceRefXbrl})` : 'Defaulted to 20%', citationN: opts.scope.ebitda_margin == null && trailingMargin != null ? 1 : undefined },
+    { field: 'exit_multiple', label: 'Exit multiple', value: `${inputs.exitMultiple.toFixed(1)}x`, origin: opts.scope.exit_multiple != null ? 'user_assumption' : 'default', sourceRef: opts.scope.exit_multiple != null ? 'Scope card' : 'Manifest default (11.0x)' },
+    { field: 'hold_period', label: 'Hold period', value: `${inputs.holdPeriod}y`, origin: opts.scope.hold_period != null ? 'user_assumption' : 'default', sourceRef: opts.scope.hold_period != null ? 'Scope card' : 'Manifest default (5y)' },
+    { field: 'cost_of_debt', label: 'Cost of debt', value: `${(inputs.costOfDebt * 100).toFixed(2)}%`, origin: opts.scope.cost_of_debt != null ? 'user_assumption' : 'default', sourceRef: opts.scope.cost_of_debt != null ? 'Scope card' : 'Manifest default (9%)' },
+    { field: 'tax_rate', label: 'Effective tax rate', value: `${(inputs.taxRate * 100).toFixed(1)}%`, origin: 'default', sourceRef: 'Compass default (25%)' },
+    { field: 'capex_pct_revenue', label: 'Capex % revenue', value: `${(inputs.capexPctRevenue * 100).toFixed(1)}%`, origin: opts.scope.capex_pct_revenue != null ? 'user_assumption' : 'default', sourceRef: opts.scope.capex_pct_revenue != null ? 'Scope card' : 'Manifest default (5%)' },
+  ];
+  yield { type: 'inputs_traced', inputs: inputTrace } as unknown as LBOPipelineEvent;
+
   yield { type: 'progress', step: 'Running model — sources, debt schedule, returns, sensitivity…' };
 
   // ---------- Run the model with NaN guards ----------

@@ -13,7 +13,7 @@ export interface WorkTrace {
   scope: Record<string, string | number | boolean | string[]>;
   activity: Array<{ t: number; type: string; label: string; detail?: string }>;
   sources: Array<{ n: number; title: string; url: string | null; source: string; docType: string; filedAt: string | null }>;
-  inputs?: Array<{ field: string; value: string; origin: 'sourced' | 'user_assumption' | 'default'; sourceRef?: string }>;
+  inputs?: Array<{ field: string; label?: string; value: string; origin: 'sourced' | 'user_assumption' | 'model_knowledge' | 'default'; sourceRef?: string; citationN?: number }>;
   calc?: Array<{ step: string; expr: string; value: string }>;
   confidence?: { score: number; breakdown: Array<{ factor: string; weight: number; value: number; note: string }> };
   citationAccuracy?: { score: number; verified: number; checked: number; failures: Array<{ n: number; reason: string }> };
@@ -103,14 +103,20 @@ export default function WorkPage() {
             <tbody>
               {trace.inputs.map((inp, i) => (
                 <tr key={i}>
-                  <td className="work-td-strong">{inp.field}</td>
+                  <td className="work-td-strong">{inp.label ?? inp.field}</td>
                   <td>{inp.value}</td>
                   <td>
                     <span className={`origin-pill origin-${inp.origin}`}>
-                      {inp.origin === 'sourced' ? 'sourced' : inp.origin === 'user_assumption' ? 'user assumption' : 'default'}
+                      {inp.origin === 'sourced' ? 'sourced'
+                        : inp.origin === 'user_assumption' ? 'user assumption'
+                        : inp.origin === 'model_knowledge' ? 'model knowledge'
+                        : 'default'}
                     </span>
                   </td>
-                  <td className="work-td-muted">{inp.sourceRef ?? '—'}</td>
+                  <td className="work-td-muted">
+                    {inp.sourceRef ?? '—'}
+                    {inp.citationN ? <span className="cit-ref"> [{inp.citationN}]</span> : null}
+                  </td>
                 </tr>
               ))}
             </tbody>

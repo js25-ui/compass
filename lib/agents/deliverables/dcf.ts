@@ -24,6 +24,7 @@ import {
   fmtPctRaw,
   table,
   type DeliverableEvent,
+  type InputTrace,
 } from './shared';
 import { preflight } from '@/lib/data/preflight';
 import { DCF_MANIFEST as DCF_DATA_MANIFEST } from '@/lib/models/manifests';
@@ -251,6 +252,40 @@ export async function* runDCFPipeline(opts: {
     type: 'progress',
     step: `Inputs resolved: ${fmtPctRaw(result.inputs.waccPct, 2)} WACC · ${fmtPctRaw(result.inputs.terminalGrowthPct, 2)} g · base ${fmtMillions(result.baseYear.revenue)} revenue`,
   };
+
+  // Source anchor — every base-year scalar derives from this XBRL row.
+  const sources = [
+    {
+      n: 1,
+      title: `${pre.entity.name} ${revenue[0].period} financials`,
+      url: pre.entity.cik
+        ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${pre.entity.cik}&type=10-K`
+        : null,
+      meta: `SEC EDGAR · XBRL company facts · ${revenue.length}y revenue + ${oi.length}y operating income`,
+    },
+  ];
+  yield { type: 'sources', sources };
+
+  const xbrlRef = `SEC EDGAR · XBRL · ${revenue[0].period}`;
+  const userSpec = (k: keyof DCFScope) => opts.scope[k] != null;
+  const inputs: InputTrace[] = [
+    { field: 'target', label: 'Target entity', value: `${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}`, origin: 'sourced', sourceRef: pre.entity.cik ? `SEC EDGAR · CIK ${pre.entity.cik}` : 'Curated entity', citationN: 1 },
+    { field: 'base_revenue', label: 'Base-year revenue', value: fmtMillions(baseRevenue), origin: 'sourced', sourceRef: xbrlRef, citationN: 1 },
+    { field: 'base_ebit', label: 'Base-year EBIT', value: fmtMillions(baseEbit), origin: 'sourced', sourceRef: xbrlRef, citationN: 1 },
+    { field: 'base_ebit_margin', label: 'Base EBIT margin', value: `${(baseEbitMargin * 100).toFixed(1)}%`, origin: 'sourced', sourceRef: `Derived (EBIT ÷ revenue) · ${xbrlRef}`, citationN: 1 },
+    { field: 'base_capex_pct', label: 'Base capex % revenue', value: `${(baseCapexPctRevenue * 100).toFixed(2)}%`, origin: capex.length > 0 ? 'sourced' : 'default', sourceRef: capex.length > 0 ? `Derived · ${xbrlRef}` : 'Default 4% (no capex tag in filings)', citationN: capex.length > 0 ? 1 : undefined },
+    { field: 'historical_cagr', label: 'Historical revenue CAGR', value: `${(historicalCagr * 100).toFixed(1)}%`, origin: 'sourced', sourceRef: `Derived from ${revenue.length}y revenue series · ${xbrlRef}`, citationN: 1 },
+    { field: 'projection_years', label: 'Projection horizon', value: `${projectionYears}y`, origin: userSpec('projection_years') ? 'user_assumption' : 'default', sourceRef: userSpec('projection_years') ? 'Scope card' : 'Manifest default (5y)' },
+    { field: 'wacc', label: 'WACC', value: `${waccPct.toFixed(2)}%`, origin: waccMethod === 'manual' && opts.scope.discount_rate != null ? 'user_assumption' : 'default', sourceRef: waccMethod === 'manual' && opts.scope.discount_rate != null ? 'Scope card (manual)' : `Default ${DEFAULT_COMPUTED_WACC_PCT}% (no CAPM input yet)` },
+    { field: 'terminal_growth', label: 'Terminal growth (g)', value: `${terminalGrowthPct.toFixed(2)}%`, origin: userSpec('terminal_growth_rate') ? 'user_assumption' : 'default', sourceRef: userSpec('terminal_growth_rate') ? 'Scope card' : 'Manifest default (2.5%)' },
+    { field: 'tax_rate', label: 'Effective tax rate', value: `${taxRatePct.toFixed(1)}%`, origin: userSpec('tax_rate') ? 'user_assumption' : 'default', sourceRef: userSpec('tax_rate') ? 'Scope card' : 'Manifest default (25%)' },
+    { field: 'terminal_method', label: 'Terminal-value method', value: terminalMethod === 'gordon_growth' ? 'Gordon Growth' : 'Exit multiple', origin: userSpec('terminal_method') ? 'user_assumption' : 'default', sourceRef: userSpec('terminal_method') ? 'Scope card' : 'Manifest default (Gordon Growth)' },
+  ];
+  if (terminalMethod === 'exit_multiple' && exitMultiple != null) {
+    inputs.push({ field: 'exit_multiple', label: 'Exit multiple', value: `${exitMultiple.toFixed(1)}x`, origin: userSpec('exit_multiple') ? 'user_assumption' : 'default', sourceRef: userSpec('exit_multiple') ? 'Scope card' : 'Manifest default (10x)' });
+  }
+  yield { type: 'inputs_traced', inputs };
+
   yield { type: 'token', text: renderDCFHtml(target, result, pre.entity?.ticker ?? null) };
   yield { type: 'done' };
 }
