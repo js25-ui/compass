@@ -55,6 +55,8 @@ interface AssistantTurn {
   sources: ChatSource[];
   inputsTrace?: InputTraceEvent[];
   calcSteps?: Array<{ step: string; expr: string; value: string }>;
+  confidence?: { score: number; breakdown: Array<{ factor: string; weight: number; value: number; note: string }> };
+  citationAccuracy?: { score: number; verified: number; checked: number; failures: Array<{ n: number; reason: string }> };
   /** Original user query that drove this turn (for the Work-tab title). */
   query: string;
   startedAt: number;
@@ -188,6 +190,7 @@ type ChatEvent =
   | { type: 'sources'; sources: ChatSource[] }
   | { type: 'inputs_traced'; deliverable: string; inputs: InputTraceEvent[] }
   | { type: 'calc_steps'; deliverable: string; calc: Array<{ step: string; expr: string; value: string }> }
+  | { type: 'confidence'; deliverable: string; score: number; breakdown: Array<{ factor: string; weight: number; value: number; note: string }> }
   | { type: 'token'; text: string }
   | { type: 'usage'; input: number; output: number }
   | { type: 'done'; latencyMs: number; turns?: number }
@@ -397,6 +400,9 @@ function ConversationView() {
         if (event.type === 'calc_steps') {
           updateAssistant(t => ({ ...t, calcSteps: event.calc }));
         }
+        if (event.type === 'confidence') {
+          updateAssistant(t => ({ ...t, confidence: { score: event.score, breakdown: event.breakdown } }));
+        }
         if (event.type === 'clarification') {
           updateAssistant(t => ({
             ...t,
@@ -557,6 +563,8 @@ function ConversationView() {
                       sources={turn.sources}
                       time={turn.time}
                       latencyMs={turn.latencyMs}
+                      confidence={turn.confidence}
+                      citationAccuracy={turn.citationAccuracy}
                     />
                   )}
                 </div>
@@ -628,6 +636,7 @@ function writeWorkTrace(turn: AssistantTurn): void {
       sources: turn.sources,
       inputs: turn.inputsTrace,
       calc: turn.calcSteps,
+      confidence: turn.confidence,
       error: turn.error,
     };
     localStorage.setItem('compass:lastWorkTrace', JSON.stringify(trace));

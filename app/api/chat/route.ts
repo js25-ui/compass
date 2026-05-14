@@ -14,7 +14,8 @@ import { runPrecedentsPipeline, type PrecedentsScope } from '@/lib/agents/delive
 import { runICMemoPipeline, type ICMemoScope } from '@/lib/agents/deliverables/ic_memo';
 import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/deliverables/pitch_book';
 import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
-import type { DeliverableEvent } from '@/lib/agents/deliverables/shared';
+import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
+import { computeConfidence } from '@/lib/agents/deliverables/confidence';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -376,7 +377,10 @@ function relayDeliverableEvent(event: unknown, label: string, emit: RelayEmit): 
     if (i) emit({ type: 'tool_result', name: label, summary: `Inputs: entry $${i.entryEV}M · ${i.leverageMultiple}x leverage · ${i.holdPeriod}y hold · ${i.exitMultiple}x exit` });
   }
   else if (ev.type === 'inputs_traced') {
-    emit({ type: 'inputs_traced', deliverable: label, inputs: ev.inputs });
+    const inputs = (ev.inputs ?? []) as InputTrace[];
+    emit({ type: 'inputs_traced', deliverable: label, inputs });
+    const conf = computeConfidence(inputs);
+    emit({ type: 'confidence', deliverable: label, score: conf.score, breakdown: conf.breakdown });
   }
   else if (ev.type === 'calc_steps') {
     emit({ type: 'calc_steps', deliverable: label, calc: (ev as { calc?: unknown }).calc });

@@ -1272,6 +1272,20 @@ button { font-family: inherit; }
 .origin-default { background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; }
 .cit-ref { color: #4a90e2; font-weight: 600; margin-left: 4px; }
 
+.conf-pill, .cit-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: baseline;
+}
+.conf-high { background: #0a2620; color: #4ade80; border: 1px solid #1a3a30; }
+.conf-med  { background: #261a0a; color: #fbbf24; border: 1px solid #3a2a10; }
+.conf-low  { background: #260d0d; color: #f87171; border: 1px solid #3a1a1a; }
+
 .work-activity {
   list-style: none;
   padding: 0;
