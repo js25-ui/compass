@@ -22,6 +22,9 @@ export function ChatLanding() {
 
   useEffect(() => {
     inputRef.current?.focus();
+    // Landing means start fresh — clear any prior conversation so the
+    // next 'Ask' doesn't accidentally inherit stale follow-up context.
+    try { localStorage.removeItem('compass:conversationTurns'); } catch { /* ignore */ }
   }, []);
 
   const send = () => {

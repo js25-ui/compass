@@ -203,6 +203,52 @@ function ConversationView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const seededRef = useRef<string | null>(null);
   const idRef = useRef(0);
+  const hydratedRef = useRef(false);
+
+  // Hydrate prior turns from localStorage on mount so a refresh doesn't
+  // wipe the conversation. We only restore turns that are no longer
+  // streaming — any in-flight stream from a prior session is orphaned
+  // and would dangle if we kept it in 'streaming' phase.
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    try {
+      const raw = localStorage.getItem('compass:conversationTurns');
+      if (!raw) return;
+      const restored = JSON.parse(raw) as Turn[];
+      if (!Array.isArray(restored) || restored.length === 0) return;
+      const safe = restored
+        .filter(t => t.role === 'user' || (t.role === 'assistant' && t.phase === 'done'))
+        .slice(-50);
+      if (safe.length === 0) return;
+      const maxId = safe.reduce((m, t) => Math.max(m, t.id), 0);
+      idRef.current = maxId;
+      setTurns(safe);
+      // If a query was passed via ?q=, only seed it if the most-recent
+      // user turn doesn't already match — avoid double-firing on refresh.
+      if (initialQ) {
+        const lastUser = [...safe].reverse().find((t): t is UserTurn => t.role === 'user');
+        if (lastUser && lastUser.text === initialQ) {
+          seededRef.current = initialQ;
+        }
+      }
+    } catch {
+      /* corrupt or unavailable — fresh start */
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist on every change. Trim to last 50 turns to keep localStorage
+  // bounded — older context isn't useful for follow-up detection anyway.
+  useEffect(() => {
+    if (turns.length === 0) return;
+    try {
+      const trimmed = turns.slice(-50);
+      localStorage.setItem('compass:conversationTurns', JSON.stringify(trimmed));
+    } catch {
+      /* quota or unavailable — silently skip */
+    }
+  }, [turns]);
 
   interface SubmitOpts {
     question: string;
