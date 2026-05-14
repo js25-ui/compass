@@ -58,9 +58,19 @@ export async function preflight(opts: {
     };
   }
 
-  // Step 2 — pull cached facts for the target.
-  let facts = await getFactsForTarget(entity.id);
-  attempted.push('financial_facts_cache');
+  // Step 2 — pull cached facts for the target. A transient Supabase outage
+  // here used to throw past the pipeline and surface as a raw error event
+  // with no `done` — the UI saw a stream cutoff. Soft-fail to an empty
+  // cache so the XBRL seed path below still gets a chance, and if that
+  // also fails the manifest check below produces a clean refusal banner.
+  let facts: FinancialFact[];
+  try {
+    facts = await getFactsForTarget(entity.id);
+    attempted.push('financial_facts_cache');
+  } catch (err) {
+    facts = [];
+    attempted.push(`financial_facts_cache_failed(${err instanceof Error ? err.message : 'unknown'})`);
+  }
 
   // Step 3 — if cache is sparse and we have a CIK, prime from XBRL.
   // financial_facts has a FK to targets(id), so the target row must exist
