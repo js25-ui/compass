@@ -128,6 +128,7 @@ Original ask: ${opts.query}`;
     parsed = await sonnetJson<SonnetOut>({ systemPrompt: SYSTEM_PROMPT, userMessage, maxTokens: 2500 });
   } catch (err) {
     yield { type: 'error', error: err instanceof Error ? err.message : 'Precedents generation failed' };
+    yield { type: 'done' };
     return;
   }
 

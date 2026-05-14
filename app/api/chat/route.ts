@@ -286,6 +286,7 @@ export async function POST(request: NextRequest) {
         }
       } catch (err) {
         emit({ type: 'error', error: err instanceof Error ? err.message : 'unknown error' });
+        emit({ type: 'done', latencyMs: 0 });
       } finally {
         closeOnce();
       }

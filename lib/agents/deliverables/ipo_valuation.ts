@@ -179,6 +179,7 @@ Original ask: ${opts.query}${realFinancials}`;
     parsed = await sonnetJson<SonnetOut>({ systemPrompt: SYSTEM_PROMPT, userMessage, maxTokens: 3500 });
   } catch (err) {
     yield { type: 'error', error: err instanceof Error ? err.message : 'IPO valuation generation failed' };
+    yield { type: 'done' };
     return;
   }
 

@@ -163,6 +163,7 @@ Original ask: ${opts.query}${realCreditNote}`;
     parsed = await sonnetJson<SonnetOut>({ systemPrompt: SYSTEM_PROMPT, userMessage, maxTokens: 3000 });
   } catch (err) {
     yield { type: 'error', error: err instanceof Error ? err.message : 'Bond pricing generation failed' };
+    yield { type: 'done' };
     return;
   }
 

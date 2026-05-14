@@ -122,6 +122,7 @@ export async function* runPitchBookPipeline(opts: {
     exec = await genExecAndRec(resolvedName, focus, opts.query);
   } catch (err) {
     yield { type: 'error', error: `Exec summary generation failed: ${err instanceof Error ? err.message : 'unknown'}` };
+    yield { type: 'done' };
     return;
   }
 
