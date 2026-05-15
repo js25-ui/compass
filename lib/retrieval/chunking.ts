@@ -8,9 +8,15 @@
  * char-window splits.
  */
 
+import { tagChunksBySection, type SectionTag } from './sections';
+
 export interface ChunkOptions {
   targetTokens?: number;
   overlapTokens?: number;
+  /** SEC form type (10-Q, 10-K, 8-K, etc.) or document doc_type. Drives
+   *  section detection — when set, every returned chunk includes its
+   *  section tag so retrieval can re-rank by intent × section. */
+  docType?: string;
 }
 
 const CHARS_PER_TOKEN = 4;
@@ -20,6 +26,8 @@ export interface Chunk {
   content: string;
   charStart: number;
   charEnd: number;
+  /** Filled when docType is passed to chunkText. Unknown otherwise. */
+  section?: SectionTag;
 }
 
 /**
@@ -77,6 +85,11 @@ export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
       charStart: bufferStart,
       charEnd: bufferStart + buffer.length,
     });
+  }
+
+  if (opts.docType) {
+    const sections = tagChunksBySection(text, chunks, opts.docType);
+    for (let i = 0; i < chunks.length; i++) chunks[i].section = sections[i];
   }
 
   return chunks;

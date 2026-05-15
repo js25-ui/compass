@@ -174,14 +174,16 @@ export async function* ingestEntity(
     yield { type: 'chunking', documents: chunkableDocs.length };
     const built: PendingChunk[] = [];
     const texts: string[] = [];
-    const meta: Array<{ docId: string; index: number }> = [];
+    const meta: Array<{ docId: string; index: number; section: string | null }> = [];
 
     outer: for (const doc of chunkableDocs) {
-      const chunks = chunkText(doc.content_full!).slice(0, MAX_CHUNKS_PER_DOC);
+      // Pass doc_type so the chunker can tag each chunk with its SEC
+      // section (income_statement, mdna, forward_looking, etc.).
+      const chunks = chunkText(doc.content_full!, { docType: doc.doc_type }).slice(0, MAX_CHUNKS_PER_DOC);
       for (const c of chunks) {
         if (texts.length >= MAX_TOTAL_CHUNKS) break outer;
         texts.push(c.content);
-        meta.push({ docId: doc.id, index: c.index });
+        meta.push({ docId: doc.id, index: c.index, section: c.section ?? null });
       }
     }
 
@@ -189,7 +191,13 @@ export async function* ingestEntity(
     yield { type: 'embedding', chunks: texts.length, batches };
     const embeddings = await embedTexts(texts, 'document');
     for (let i = 0; i < texts.length; i++) {
-      built.push({ documentId: meta[i].docId, index: meta[i].index, content: texts[i], embedding: embeddings[i] });
+      built.push({
+        documentId: meta[i].docId,
+        index: meta[i].index,
+        content: texts[i],
+        embedding: embeddings[i],
+        section: meta[i].section,
+      });
     }
     chunkRows = built;
   }

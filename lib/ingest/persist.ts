@@ -93,6 +93,9 @@ export interface PendingChunk {
   index: number;
   content: string;
   embedding: number[];
+  /** SEC filing section tag (income_statement, mdna, forward_looking,
+   *  cover_page, etc.) for retrieval re-ranking. Null for legacy chunks. */
+  section?: string | null;
 }
 
 /** Replace any existing chunks for the given document IDs, then insert the new ones. */
@@ -109,6 +112,7 @@ export async function replaceChunks(documentIds: string[], chunks: PendingChunk[
     chunk_index: c.index,
     content: c.content,
     embedding: c.embedding,
+    section: c.section ?? null,
   }));
   for (let i = 0; i < rows.length; i += 100) {
     const slice = rows.slice(i, i + 100);
