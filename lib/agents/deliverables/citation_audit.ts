@@ -120,7 +120,11 @@ function validateSource(src: SourceEntry, origin: InputTrace['origin']): SourceC
     case 'primary_document': {
       const blob = `${src.url ?? ''} ${src.meta}`;
       const claimsEdgar = /sec\.gov|edgar|sec edgar/i.test(`${src.meta} ${src.url ?? ''}`);
-      if (claimsEdgar && !/cik[\s-]?\d/i.test(blob)) {
+      // Accept any common CIK-to-digit separator: '=' (EDGAR URL query
+      // params), ':' (display labels), '-' (hyphenated forms), whitespace,
+      // or no separator at all (CIK0000320193). Previous /cik[\s-]?\d/
+      // rejected the most common format, EDGAR's own CIK=NNNNNNNNNN.
+      if (claimsEdgar && !/cik[\s\-=:_]?\d/i.test(blob)) {
         return { ok: false, reason: `Source [${src.n}] claims SEC EDGAR but has no CIK in URL/meta` };
       }
       if (origin === 'sourced' && !src.url && !/CIK|filing|10-K|10-Q|FY\d/i.test(src.meta)) {
