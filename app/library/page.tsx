@@ -13,6 +13,21 @@ interface LibraryItem {
   isPrimary: boolean;
 }
 
+interface SourceStat {
+  source: string;
+  count: number;
+  lastFiledAt: string | null;
+}
+
+interface LibraryResponse {
+  items: LibraryItem[];
+  total: number;
+  sourceStats: SourceStat[];
+  refreshedAt: string;
+  windowDays: number;
+  error?: string;
+}
+
 const SOURCE_LABELS: Record<string, string> = {
   sec_edgar: 'SEC EDGAR',
   news_rss: 'News RSS',
@@ -21,24 +36,22 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 export default function LibraryPage() {
-  const [items, setItems] = useState<LibraryItem[]>([]);
+  const [data, setData] = useState<LibraryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [docTypeFilter, setDocTypeFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [daysBack, setDaysBack] = useState(30);
-  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
 
   const load = (days: number) => {
     setLoading(true);
     setError(null);
-    fetch(`/api/recent-news?limit=200&days_back=${days}`)
+    fetch(`/api/library?limit=300&days_back=${days}`)
       .then(r => r.json())
-      .then((j: { items?: LibraryItem[]; error?: string }) => {
+      .then((j: LibraryResponse) => {
         if (j.error) throw new Error(j.error);
-        setItems(j.items ?? []);
-        setRefreshedAt(Date.now());
+        setData(j);
       })
       .catch(err => setError(err instanceof Error ? err.message : 'load failed'))
       .finally(() => setLoading(false));
@@ -46,10 +59,8 @@ export default function LibraryPage() {
 
   useEffect(() => { load(daysBack); }, [daysBack]);
 
-  const sources = useMemo(() => {
-    const set = new Set(items.map(i => i.source));
-    return ['all', ...Array.from(set).sort()];
-  }, [items]);
+  const items = data?.items ?? [];
+  const sourceStats = data?.sourceStats ?? [];
 
   const docTypes = useMemo(() => {
     const set = new Set(items.map(i => i.docType));
@@ -66,6 +77,9 @@ export default function LibraryPage() {
     });
   }, [items, search, sourceFilter, docTypeFilter]);
 
+  const lastRefreshText = data?.refreshedAt ? new Date(data.refreshedAt).toLocaleTimeString() : '—';
+  const newestInCorpus = items[0]?.filedAt ? items[0].filedAt.slice(0, 10) : '—';
+
   return (
     <div className="library-page">
       <header className="library-header">
@@ -74,23 +88,58 @@ export default function LibraryPage() {
           <h1 className="library-title">Browse everything Compass has indexed</h1>
           <p className="library-sub">
             Every document the discovery engine has gathered. Filterable by source, type, and entity.
+            The corpus refreshes on demand whenever a deliverable touches an entity that lacks coverage.
           </p>
         </div>
         <div className="library-stats">
           <div className="library-stat">
-            <div className="library-stat-label">Items</div>
+            <div className="library-stat-label">In window</div>
             <div className="library-stat-value">{filtered.length} / {items.length}</div>
+          </div>
+          <div className="library-stat">
+            <div className="library-stat-label">Corpus total</div>
+            <div className="library-stat-value">{data?.total ?? '—'}</div>
           </div>
           <div className="library-stat">
             <div className="library-stat-label">Window</div>
             <div className="library-stat-value">{daysBack}d</div>
           </div>
           <div className="library-stat">
-            <div className="library-stat-label">Last refresh</div>
-            <div className="library-stat-value">{refreshedAt ? new Date(refreshedAt).toLocaleTimeString() : '—'}</div>
+            <div className="library-stat-label">Newest filing</div>
+            <div className="library-stat-value">{newestInCorpus}</div>
+          </div>
+          <div className="library-stat">
+            <div className="library-stat-label">Refreshed</div>
+            <div className="library-stat-value">{lastRefreshText}</div>
           </div>
         </div>
       </header>
+
+      {sourceStats.length > 0 && (
+        <div className="source-strip">
+          <div className="source-strip-label">Source coverage (last {daysBack}d)</div>
+          <div className="source-strip-row">
+            {sourceStats.map(s => (
+              <button
+                key={s.source}
+                className={`source-chip${sourceFilter === s.source ? ' active' : ''}`}
+                onClick={() => setSourceFilter(prev => prev === s.source ? 'all' : s.source)}
+              >
+                <span className="source-chip-name">{SOURCE_LABELS[s.source] ?? s.source}</span>
+                <span className="source-chip-count">{s.count}</span>
+                <span className="source-chip-meta">
+                  {s.lastFiledAt ? `last ${s.lastFiledAt.slice(0, 10)}` : 'no recent filing'}
+                </span>
+              </button>
+            ))}
+            {sourceFilter !== 'all' ? (
+              <button className="source-chip-clear" onClick={() => setSourceFilter('all')}>
+                Clear filter
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       <div className="library-controls">
         <input
@@ -100,9 +149,6 @@ export default function LibraryPage() {
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
-        <select className="library-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
-          {sources.map(s => <option key={s} value={s}>{s === 'all' ? 'All sources' : SOURCE_LABELS[s] ?? s}</option>)}
-        </select>
         <select className="library-select" value={docTypeFilter} onChange={e => setDocTypeFilter(e.target.value)}>
           {docTypes.map(t => <option key={t} value={t}>{t === 'all' ? 'All types' : t}</option>)}
         </select>
@@ -111,6 +157,8 @@ export default function LibraryPage() {
           <option value={14}>Last 14 days</option>
           <option value={30}>Last 30 days</option>
           <option value={60}>Last 60 days</option>
+          <option value={180}>Last 180 days</option>
+          <option value={365}>Last year</option>
         </select>
         <button className="library-refresh" onClick={() => load(daysBack)} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh'}

@@ -1525,3 +1525,55 @@ button { font-family: inherit; }
   color: #60a5fa;
   border: 1px solid #1a2a3a;
 }
+
+.source-strip {
+  margin-bottom: 16px;
+}
+.source-strip-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 8px;
+}
+.source-strip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+.source-chip {
+  background: #0d0d0d;
+  border: 1px solid #1f1f1f;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: #e5e5e5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  min-width: 140px;
+}
+.source-chip:hover { border-color: #2a2a2a; background: #111; }
+.source-chip.active { border-color: #4a90e2; background: #0d1a26; }
+.source-chip-name { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }
+.source-chip-count {
+  font-size: 20px;
+  font-weight: 700;
+  font-feature-settings: 'tnum';
+  color: #fff;
+}
+.source-chip-meta { font-size: 10px; color: #666; }
+.source-chip-clear {
+  background: transparent;
+  color: #888;
+  border: 1px solid #2a2a2a;
+  padding: 0 14px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.source-chip-clear:hover { color: #fff; border-color: #4a90e2; }
