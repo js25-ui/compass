@@ -276,7 +276,10 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
       ? `\n\nPRIOR CONVERSATION CONTEXT: This conversation has been about ${opts.priorContext.detectedTarget.name}${opts.priorContext.detectedTarget.ticker ? ` (${opts.priorContext.detectedTarget.ticker})` : ''}, task=${opts.priorContext.taskType}. When the user's current message is ambiguous about the target ("the data", "their financials", "is there 2025 data"), assume they mean ${opts.priorContext.detectedTarget.name} unless they explicitly name a different entity.`
       : '';
     const pinnedTargetNote = pinnedTarget
-      ? `\n\nPINNED TARGET FOR THIS TURN: The user's named entity is ${pinnedTarget.name}${pinnedTarget.ticker ? ` (${pinnedTarget.ticker})` : ''}, target_id="${pinnedTarget.id}". The on-demand ingest already ran for this entity, so the corpus has its filings + news indexed under this target_id. When you call search_corpus for entity-specific information, you MUST pass target_ids=["${pinnedTarget.id}"] — otherwise vector similarity may return chunks for a different entity with a similar name (e.g. CARVANA vs CAVA GROUP). Do NOT call ingest_entity for this target again; it's already been ingested for this turn.`
+      ? `\n\nPINNED TARGET FOR THIS TURN: The user's named entity is ${pinnedTarget.name}${pinnedTarget.ticker ? ` (${pinnedTarget.ticker})` : ''}, target_id="${pinnedTarget.id}". The on-demand ingest already ran for this entity — the corpus has its filings + news indexed under this target_id. Required tool flow:
+  1. Make EXACTLY ONE search_corpus call with target_ids=["${pinnedTarget.id}"] using natural-language keywords for what the user asked.
+  2. Then immediately WRITE THE FINAL ANSWER in your next turn.
+Do NOT call search_corpus a second time on the same target — the first targeted search returns everything we have indexed, additional searches won't surface new content and will use up the function-timeout budget. Do NOT call ingest_entity for this target again; it's already been ingested for this turn.`
       : '';
     const turnSystem = isLastTurn
       ? `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`

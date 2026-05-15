@@ -23,7 +23,10 @@ import { scanNumericLeaks } from '@/lib/agents/deliverables/numeric_gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+// Cold-corpus chat queries (Carvana, Wingstop, anything not yet indexed)
+// budget: pre-ingest ~15-25s, search turn ~6-10s, final-answer turn ~10-20s.
+// The 60s default was a tight fit; 90s gives margin without being wasteful.
+export const maxDuration = 90;
 
 interface ScopeAnswers {
   [questionId: string]: string | number | boolean | string[];
