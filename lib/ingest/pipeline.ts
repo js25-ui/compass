@@ -29,8 +29,43 @@ import type { IngestEvent, IngestOptions, SourceName } from './types';
 const DEFAULT_MAX_FILINGS = 10;
 const DEFAULT_MAX_ARTICLES = 15;
 const MIN_CHUNK_CHARS = 200;
-const MAX_CHUNKS_PER_DOC = 3;
-const MAX_TOTAL_CHUNKS = 20;          // hard cap; keeps Voyage usage in free-tier TPM
+// Per-doc cap is doc-type-dependent. SEC filings (10-Q, 10-K) are long and
+// have multiple high-value sections (income statement, MD&A, cash flow,
+// balance sheet) — keeping 3 chunks per filing means we only keep the
+// cover page + ToC + forward-looking-statements boilerplate. Keep 30 per
+// filing so the income statement and MD&A actually make it in. News
+// articles are short and don't need more than 2.
+const MAX_CHUNKS_PER_FILING = 30;
+const MAX_CHUNKS_PER_NEWS = 2;
+// Total ceiling across all docs in one ingest. Was 20 — wildly under-sized
+// for entities with multiple filings. 200 covers 5-6 filings worth of
+// well-tagged chunks plus headroom for news + XBRL.
+const MAX_TOTAL_CHUNKS = 200;
+
+// Section preference ordering. When we have more chunks for a doc than
+// MAX_CHUNKS_PER_FILING, keep the ones from the most valuable sections
+// first. Boilerplate sections rank last so they're the first to be cut.
+const SECTION_PRIORITY: Record<string, number> = {
+  income_statement: 100,
+  mdna: 95,
+  cash_flow: 90,
+  balance_sheet: 85,
+  notes: 75,
+  equity_statement: 70,
+  market_risk: 60,
+  risk_factors: 55,
+  legal_proceedings: 45,
+  eight_k_item: 50,
+  other_information: 40,
+  controls_procedures: 30,
+  signatures: 20,
+  exhibits: 25,
+  forward_looking: 15,
+  table_of_contents: 5,
+  cover_page: 5,
+  news_body: 50,
+  unknown: 35,
+};
 
 export async function* ingestEntity(
   query: string,
@@ -194,8 +229,21 @@ export async function* ingestEntity(
     outer: for (const doc of chunkableDocs) {
       // Pass doc_type so the chunker can tag each chunk with its SEC
       // section (income_statement, mdna, forward_looking, etc.).
-      const chunks = chunkText(doc.content_full!, { docType: doc.doc_type }).slice(0, MAX_CHUNKS_PER_DOC);
-      for (const c of chunks) {
+      const allChunks = chunkText(doc.content_full!, { docType: doc.doc_type });
+      const perDocCap = isSecFiling(doc.doc_type) ? MAX_CHUNKS_PER_FILING : MAX_CHUNKS_PER_NEWS;
+      // Order by section priority (income_statement / MD&A first, cover_page
+      // / forward_looking last), then preserve original position as a
+      // tie-breaker. Slicing to perDocCap keeps the highest-value sections.
+      const ordered = [...allChunks].sort((a, b) => {
+        const ap = SECTION_PRIORITY[a.section ?? 'unknown'] ?? 35;
+        const bp = SECTION_PRIORITY[b.section ?? 'unknown'] ?? 35;
+        if (bp !== ap) return bp - ap;
+        return a.index - b.index;
+      }).slice(0, perDocCap);
+      // Re-sort by original chunk index so embeddings + storage stay in
+      // document-reading order for any consumer that cares.
+      ordered.sort((a, b) => a.index - b.index);
+      for (const c of ordered) {
         if (texts.length >= MAX_TOTAL_CHUNKS) break outer;
         texts.push(c.content);
         meta.push({ docId: doc.id, index: c.index, section: c.section ?? null });
@@ -230,6 +278,10 @@ export async function* ingestEntity(
     chunksAdded: chunkRows.length,
     durationMs: Date.now() - startedAt,
   };
+}
+
+function isSecFiling(docType: string): boolean {
+  return /^(10[- ]?[qk](?:\/a)?|8[- ]?k(?:\/a)?|s[- ]?1(?:\/a)?|20[- ]?f|6[- ]?k|40[- ]?f|def\s*14a)$/i.test(docType.trim());
 }
 
 async function timeIt(
