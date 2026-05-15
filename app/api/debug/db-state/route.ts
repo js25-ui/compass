@@ -30,7 +30,7 @@ export async function GET(_req: NextRequest) {
 
   let clientReady = false;
   let clientError: string | null = null;
-  let probes: Record<string, ProbeResult> = {};
+  const probes: Record<string, ProbeResult> = {};
   try {
     const sb = getSupabaseService();
     clientReady = true;
