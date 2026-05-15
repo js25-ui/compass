@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     type DocRow = { id: string; doc_type: string; title: string; filed_at: string | null; source: string };
     const docs = (docsRes.data ?? []) as DocRow[];
 
-    // Chunks for each doc — count + section breakdown
+    // Chunks for each doc — count + section breakdown + indices
     type DocSummary = {
       id: string;
       doc_type: string;
@@ -40,21 +40,30 @@ export async function GET(request: NextRequest) {
       filed_at: string | null;
       source: string;
       chunkCount: number;
+      contentLen: number | null;
       sections: Record<string, number>;
+      indices: number[];
+      previews: Array<{ idx: number; section: string | null; preview: string }>;
     };
     const docSummaries: DocSummary[] = [];
     for (const doc of docs) {
       const chunksRes = await sb
         .from('chunks')
-        .select('id, section')
-        .eq('document_id', doc.id);
-      type ChunkRow = { id: string; section: string | null };
+        .select('chunk_index, section, content')
+        .eq('document_id', doc.id)
+        .order('chunk_index');
+      type ChunkRow = { chunk_index: number; section: string | null; content: string };
       const chunks = (chunksRes.data ?? []) as ChunkRow[];
       const sections: Record<string, number> = {};
       for (const c of chunks) {
         const s = c.section ?? 'no-tag';
         sections[s] = (sections[s] ?? 0) + 1;
       }
+      // Fetch the document's content_full length (don't return the body — too big)
+      const docRes = await sb.from('documents').select('content_full').eq('id', doc.id).maybeSingle();
+      type ContentRow = { content_full: string | null };
+      const contentLen = (docRes.data as ContentRow | null)?.content_full?.length ?? null;
+
       docSummaries.push({
         id: doc.id,
         doc_type: doc.doc_type,
@@ -62,7 +71,14 @@ export async function GET(request: NextRequest) {
         filed_at: doc.filed_at,
         source: doc.source,
         chunkCount: chunks.length,
+        contentLen,
         sections,
+        indices: chunks.map(c => c.chunk_index),
+        previews: chunks.slice(0, 3).map(c => ({
+          idx: c.chunk_index,
+          section: c.section,
+          preview: c.content.slice(0, 200),
+        })),
       });
     }
 
