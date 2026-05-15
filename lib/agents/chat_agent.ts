@@ -23,6 +23,11 @@ import { lookupXbrlFacts, summarizeFactsForPrompt } from '@/lib/retrieval/xbrl_l
 
 const MAX_TURNS = 3;
 const INGEST_BUDGET_MS = 25_000;
+/** Always pre-fetched for any pinned target with a CIK. The metrics here
+ *  are the headline ones every research brief routinely needs — surfacing
+ *  them in the system prompt gives Sonnet specific values to cite even
+ *  when the user's query didn't explicitly mention them. */
+const DEFAULT_XBRL_METRICS = ['revenue', 'operating_income', 'net_income', 'gross_profit'];
 
 const SYSTEM_PROMPT = `You are Compass, a capital-markets analyst assistant. You help users research companies, deals, securities, and market activity.
 
@@ -259,34 +264,39 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
   }
 
   // ---------- XBRL fact pre-fetch ----------
-  // If the user is asking about specific financial metrics for a pinned
-  // target with a CIK, hit financial_facts directly before Sonnet starts.
-  // The chunk re-ranker biases retrieval toward the income statement /
-  // MD&A, but XBRL values are canonically structured and don't depend on
-  // the model finding the right table — surface them in the system prompt
-  // so Sonnet can cite specific numbers even if a vector chunk for that
-  // exact metric never surfaces.
+  // For any pinned target with a CIK, surface the common financial-statement
+  // metrics from financial_facts directly in the system prompt. Generic
+  // queries like 'research brief on Snowflake latest quarter' don't match
+  // the metric-keyword detector, but the analyst still wants revenue and
+  // net income visible in the answer — pulling them unconditionally is
+  // one Supabase round-trip and lets Sonnet cite real numbers without
+  // depending on the chunk re-ranker landing on the right table.
+  //
+  // We expand the metric set when the query explicitly mentions specific
+  // items (capex, debt, etc.) so the summary doesn't bury the headline
+  // numbers under tangentially-requested ones.
   let xbrlSummary = '';
   if (pinnedTarget?.cik) {
-    const requestedMetrics = detectFactsLookup(query);
-    if (requestedMetrics.length > 0) {
-      try {
-        const xbrl = await lookupXbrlFacts({
-          targetId: pinnedTarget.id,
-          metrics: requestedMetrics,
-          periodsBack: 3,
-        });
-        if (xbrl.values.length > 0) {
-          xbrlSummary = summarizeFactsForPrompt(pinnedTarget.name, xbrl);
-          yield {
-            type: 'tool_result',
-            name: 'lookup_facts',
-            summary: `XBRL facts pre-fetched for ${pinnedTarget.name}: ${xbrl.values.map(v => v.metric).join(', ')} (${xbrl.values.length}/${requestedMetrics.length} metrics)`,
-          };
-        }
-      } catch {
-        // Soft-fail — Sonnet still has the chunk-retrieval path.
+    const explicit = detectFactsLookup(query);
+    const metrics = explicit.length > 0
+      ? Array.from(new Set([...DEFAULT_XBRL_METRICS, ...explicit]))
+      : DEFAULT_XBRL_METRICS;
+    try {
+      const xbrl = await lookupXbrlFacts({
+        targetId: pinnedTarget.id,
+        metrics,
+        periodsBack: 3,
+      });
+      if (xbrl.values.length > 0) {
+        xbrlSummary = summarizeFactsForPrompt(pinnedTarget.name, xbrl);
+        yield {
+          type: 'tool_result',
+          name: 'lookup_facts',
+          summary: `XBRL facts pre-fetched for ${pinnedTarget.name}: ${xbrl.values.map(v => v.metric).join(', ')} (${xbrl.values.length}/${metrics.length} metrics${explicit.length > 0 ? ' — explicit ask: ' + explicit.join(', ') : ''})`,
+        };
       }
+    } catch {
+      // Soft-fail — Sonnet still has the chunk-retrieval path.
     }
   }
 

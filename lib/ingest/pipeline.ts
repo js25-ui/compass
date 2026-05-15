@@ -23,7 +23,10 @@ import {
 } from './persist';
 import type { IngestEvent, IngestOptions, SourceName } from './types';
 
-const DEFAULT_MAX_FILINGS = 5;
+// Bumped from 5 → 10 so we routinely capture the most recent 10-Q + 10-K
+// alongside the 8-K event filings. With 5, fast-filing companies (multiple
+// 8-Ks in a quarter) crowded out the actual quarterly/annual reports.
+const DEFAULT_MAX_FILINGS = 10;
 const DEFAULT_MAX_ARTICLES = 15;
 const MIN_CHUNK_CHARS = 200;
 const MAX_CHUNKS_PER_DOC = 3;
