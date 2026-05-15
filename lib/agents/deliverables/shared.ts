@@ -136,7 +136,17 @@ export interface DeliverableEvent {
   type: 'progress' | 'token' | 'sources' | 'inputs_traced' | 'inputs_resolved' | 'calc_steps' | 'done' | 'error';
   step?: string;
   text?: string;
-  sources?: Array<{ n: number; title: string; url: string | null; meta: string }>;
+  /** Source entries. `kind` and `runId` are optional — the citation audit
+   *  infers kind from text when absent, and runId is only meaningful for
+   *  prior_run citations (Monte Carlo, Excel export, etc.). */
+  sources?: Array<{
+    n: number;
+    title: string;
+    url: string | null;
+    meta: string;
+    kind?: 'primary_document' | 'model_corpus' | 'prior_run';
+    runId?: string;
+  }>;
   /** For inputs_traced this is an array of InputTrace; for inputs_resolved it's
    *  the underlying pure model's input object (used to thread base scalars
    *  through prior_context for Monte Carlo / Excel follow-ups). */

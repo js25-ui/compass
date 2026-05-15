@@ -26,6 +26,7 @@ import {
   type DistributionSpec,
   type MonteCarloResult,
 } from '@/lib/models/monte_carlo';
+import { fingerprintRun } from './citation_audit';
 
 export interface MonteCarloScope {
   underlying_model?: 'lbo' | 'dcf';
@@ -180,13 +181,18 @@ export async function* runMonteCarloPipeline(opts: {
     return;
   }
 
-  // 4) Sources — anchor to the prior model run's identity.
+  // 4) Sources — anchor to the prior model run's identity. The runId is a
+  // deterministic fingerprint of the prior run's _model_* keys so the
+  // citation audit can confirm this isn't a phantom pointer.
+  const priorRunId = fingerprintRun(underlying, priorScope as Record<string, unknown>);
   const sources = [
     {
       n: 1,
       title: `${targetName} ${underlying.toUpperCase()} base run`,
       url: null,
-      meta: `Base inputs sampled from the prior ${underlying.toUpperCase()} scope in this conversation`,
+      meta: `Base inputs sampled from the prior ${underlying.toUpperCase()} scope in this conversation (runId ${priorRunId})`,
+      kind: 'prior_run' as const,
+      runId: priorRunId,
     },
   ];
   yield { type: 'sources', sources };

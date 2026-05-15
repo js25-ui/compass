@@ -18,7 +18,7 @@ import { runFootballFieldPipeline, type FootballFieldScope } from '@/lib/agents/
 import { runMonteCarloPipeline, type MonteCarloScope } from '@/lib/agents/deliverables/monte_carlo';
 import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
 import { computeConfidence } from '@/lib/agents/deliverables/confidence';
-import { auditCitations } from '@/lib/agents/deliverables/citation_audit';
+import { auditCitations, fingerprintRun } from '@/lib/agents/deliverables/citation_audit';
 import { scanNumericLeaks } from '@/lib/agents/deliverables/numeric_gate';
 
 export const runtime = 'nodejs';
@@ -481,13 +481,16 @@ async function* excelExportAction(body: Body): AsyncGenerator<DeliverableEvent, 
       { field: 'tabs', label: 'Workbook tabs', value: 'Inputs / Model / Outputs / Sensitivity / Sources', origin: 'default', sourceRef: 'Static layout' },
     ],
   };
+  const priorRunId = fingerprintRun(rawTask, prior.scope as Record<string, unknown>);
   yield {
     type: 'sources',
     sources: [{
       n: 1,
       title: `${targetLabel} prior ${rawTask.toUpperCase()} run`,
       url: null,
-      meta: 'Base inputs and computed outputs are sourced from the conversation\'s prior model run',
+      meta: `Base inputs and computed outputs are sourced from the conversation's prior model run (runId ${priorRunId})`,
+      kind: 'prior_run' as const,
+      runId: priorRunId,
     }],
   };
   yield { type: 'done' };

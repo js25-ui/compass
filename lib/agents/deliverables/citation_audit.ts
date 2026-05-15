@@ -1,23 +1,44 @@
 /**
  * Citation accuracy verification.
  *
- * For each sourced input, verify that:
- *  (a) it carries a citationN pointer
- *  (b) the citationN points to a real entry in the sources array
- *  (c) the source has a non-empty title and meta
- *  (d) when the source claims SEC EDGAR, the URL or meta contains a CIK
+ * Each input that requires citation is validated against the source it
+ * points to. Sources fall into three distinct classes, each with its own
+ * validity rules — using one rule for all of them produces false-negative
+ * audit failures for legitimate non-document citations:
  *
- * Inputs tagged model_knowledge are held to a softer bar — they must cite
- * an entry in sources, but the source's url can be null since model
- * knowledge has no public URL.
+ *   - primary_document  An indexed filing or external doc. Needs a URL or
+ *                       a specific identifier (CIK / filing / 10-K / 10-Q /
+ *                       FY-year) in title/url/meta. EDGAR claims must show
+ *                       a CIK.
+ *   - model_corpus      LLM training knowledge with no live feed. Meta must
+ *                       acknowledge the model/training/knowledge caveat —
+ *                       i.e. you can't disguise model output as a filing.
+ *   - prior_run         A model run completed earlier in this conversation.
+ *                       Meta must reference the chain ("prior / previous /
+ *                       in this conversation / earlier"), OR carry a runId
+ *                       that ties to a real prior_context fingerprint.
  *
- * This is intentionally not a "does the cited document actually contain
- * the cited fact" verification — that would require a re-retrieval pass
- * against the corpus on every run. What we can verify cheaply is that the
- * citation chain is internally consistent and not a phantom pointer.
+ * The kind can be declared explicitly on the SourceEntry, or inferred from
+ * the title/meta/url text when absent. This keeps existing pipelines
+ * working without forcing every source to carry an explicit kind today.
  */
 
 import type { InputTrace } from './shared';
+
+export type SourceKind = 'primary_document' | 'model_corpus' | 'prior_run';
+
+export interface SourceEntry {
+  n: number;
+  title: string;
+  url: string | null;
+  meta: string;
+  /** Optional declared kind. When absent, inferKind() classifies from text. */
+  kind?: SourceKind;
+  /** For prior_run sources — a deterministic fingerprint of the prior run's
+   *  inputs (see fingerprintRun in this file). Lets the audit confirm the
+   *  citation isn't a phantom reference to a run that doesn't exist. */
+  runId?: string;
+}
 
 export interface CitationFailure {
   n: number;            // citation index that failed (or 0 if input never carried one)
@@ -31,11 +52,97 @@ export interface CitationAudit {
   failures: CitationFailure[];
 }
 
-interface SourceEntry {
-  n: number;
-  title: string;
-  url: string | null;
-  meta: string;
+/** Deterministic fingerprint of a prior run's task type + _model_* scope
+ *  keys. Used by Monte Carlo / Excel / etc. to attach a runId to prior_run
+ *  citations so the audit can reproduce-and-match.
+ *
+ *  Two 32-bit FNV-1a hashes (with different seeds) concatenated give a
+ *  64-bit-ish identifier without needing BigInt — collision risk on
+ *  sub-2^32 distinct runs is negligible for this use. */
+export function fingerprintRun(
+  taskType: string,
+  scope: Record<string, unknown>,
+): string {
+  const modelKeys = Object.keys(scope)
+    .filter(k => k.startsWith('_model_'))
+    .sort();
+  const payload = modelKeys.map(k => `${k}=${formatScopeVal(scope[k])}`).join('|');
+  const seed = `${taskType}::${payload}`;
+  const h1 = fnv1a32(seed, 0x811c9dc5);
+  const h2 = fnv1a32(seed, 0xa4093822);
+  return (h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0'));
+}
+
+function fnv1a32(s: string, seed: number): number {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    // Multiply by 16777619 (FNV prime) using Math.imul for 32-bit semantics.
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+function formatScopeVal(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'number') return v.toString();
+  if (typeof v === 'string') return v;
+  if (typeof v === 'boolean') return v ? '1' : '0';
+  return JSON.stringify(v);
+}
+
+function inferKind(s: SourceEntry): SourceKind {
+  if (s.kind) return s.kind;
+  const blob = `${s.title} ${s.meta} ${s.url ?? ''}`.toLowerCase();
+  if (/training corpus|sonnet|model-grounded|no live (?:market )?(?:data|feed)/.test(blob)) {
+    return 'model_corpus';
+  }
+  if (/prior|previous|earlier|in this conversation|carried forward|conversation context/.test(blob)) {
+    return 'prior_run';
+  }
+  if (/sec\.gov|edgar|10-k|10-q|cik|fy\d/i.test(blob)) {
+    return 'primary_document';
+  }
+  return 'primary_document';
+}
+
+type SourceCheck = { ok: true } | { ok: false; reason: string };
+
+function validateSource(src: SourceEntry, origin: InputTrace['origin']): SourceCheck {
+  if (!src.title || src.title.trim().length === 0) {
+    return { ok: false, reason: `Source [${src.n}] has empty title` };
+  }
+  if (!src.meta || src.meta.trim().length === 0) {
+    return { ok: false, reason: `Source [${src.n}] has empty meta` };
+  }
+  const kind = inferKind(src);
+  switch (kind) {
+    case 'primary_document': {
+      const blob = `${src.url ?? ''} ${src.meta}`;
+      const claimsEdgar = /sec\.gov|edgar|sec edgar/i.test(`${src.meta} ${src.url ?? ''}`);
+      if (claimsEdgar && !/cik[\s-]?\d/i.test(blob)) {
+        return { ok: false, reason: `Source [${src.n}] claims SEC EDGAR but has no CIK in URL/meta` };
+      }
+      if (origin === 'sourced' && !src.url && !/CIK|filing|10-K|10-Q|FY\d/i.test(src.meta)) {
+        return { ok: false, reason: `Sourced primary_document [${src.n}] has no URL and no filing identifier in meta` };
+      }
+      return { ok: true };
+    }
+    case 'model_corpus': {
+      if (!/training|knowledge|model-grounded|no live (?:market )?(?:data|feed)/i.test(src.meta)) {
+        return { ok: false, reason: `Source [${src.n}] is model_corpus but meta lacks training/knowledge caveat` };
+      }
+      return { ok: true };
+    }
+    case 'prior_run': {
+      const hasPriorLanguage = /prior|previous|earlier|in this conversation|carried forward/i.test(src.meta);
+      const hasRunId = typeof src.runId === 'string' && /^[0-9a-f]{8,}$/i.test(src.runId);
+      if (!hasPriorLanguage && !hasRunId) {
+        return { ok: false, reason: `Source [${src.n}] is prior_run but meta has no chain language and no runId` };
+      }
+      return { ok: true };
+    }
+  }
 }
 
 export function auditCitations(inputs: InputTrace[], sources: SourceEntry[]): CitationAudit {
@@ -60,26 +167,12 @@ export function auditCitations(inputs: InputTrace[], sources: SourceEntry[]): Ci
       failures.push({ n: inp.citationN, reason: `${inp.label ?? inp.field} cites [${inp.citationN}] but no such source in the sources array` });
       continue;
     }
-    if (!src.title || src.title.trim().length === 0) {
-      failures.push({ n: inp.citationN, reason: `Source [${inp.citationN}] has empty title` });
-      continue;
+    const result = validateSource(src, inp.origin);
+    if (result.ok) {
+      verified += 1;
+    } else {
+      failures.push({ n: inp.citationN, reason: result.reason });
     }
-    if (!src.meta || src.meta.trim().length === 0) {
-      failures.push({ n: inp.citationN, reason: `Source [${inp.citationN}] has empty meta` });
-      continue;
-    }
-    // SEC EDGAR claim → require CIK in url or meta
-    const claimsEdgar = /sec\.gov|edgar|sec edgar/i.test(`${src.meta} ${src.url ?? ''}`);
-    if (claimsEdgar && !/cik[\s-]?\d/i.test(`${src.url ?? ''} ${src.meta}`)) {
-      failures.push({ n: inp.citationN, reason: `Source [${inp.citationN}] claims SEC EDGAR but has no CIK in URL/meta` });
-      continue;
-    }
-    // sourced claim with no URL and no specific identifier in meta → suspect
-    if (inp.origin === 'sourced' && !src.url && !/CIK|filing|10-K|10-Q|FY\d/i.test(src.meta)) {
-      failures.push({ n: inp.citationN, reason: `Sourced input [${inp.citationN}] points to a source with no URL and no specific identifier` });
-      continue;
-    }
-    verified += 1;
   }
 
   const score = Math.round((verified / requiresCitation.length) * 100);
