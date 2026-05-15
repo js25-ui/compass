@@ -14,6 +14,7 @@ import { runPrecedentsPipeline, type PrecedentsScope } from '@/lib/agents/delive
 import { runICMemoPipeline, type ICMemoScope } from '@/lib/agents/deliverables/ic_memo';
 import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/deliverables/pitch_book';
 import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
+import { runFootballFieldPipeline, type FootballFieldScope } from '@/lib/agents/deliverables/football_field';
 import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
 import { computeConfidence } from '@/lib/agents/deliverables/confidence';
 import { auditCitations } from '@/lib/agents/deliverables/citation_audit';
@@ -365,8 +366,9 @@ function pickDeliverableGenerator(
       return { label: 'precedents', gen: runPrecedentsPipeline({ query, scope: scope as PrecedentsScope, detectedTarget }) };
     case 'dcf':
       return { label: 'dcf', gen: runDCFPipeline({ query, scope: scope as DCFScope, detectedTarget }) };
-    case 'monte_carlo':
     case 'football_field':
+      return { label: 'football_field', gen: runFootballFieldPipeline({ query, scope: scope as FootballFieldScope, detectedTarget }) };
+    case 'monte_carlo':
     case 'excel_model':
       return { label: tt, gen: unsupportedDeliverable(tt) };
     default:
@@ -376,7 +378,6 @@ function pickDeliverableGenerator(
 
 const UNSUPPORTED_LABELS: Record<string, string> = {
   monte_carlo: 'Monte Carlo simulation',
-  football_field: 'Football field valuation',
   excel_model: 'Excel model export',
 };
 

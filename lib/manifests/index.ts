@@ -16,6 +16,7 @@ import { DCF_MANIFEST } from './dcf';
 import { PRECEDENTS_MANIFEST } from './precedents';
 import { IC_MEMO_MANIFEST } from './ic_memo';
 import { PITCH_BOOK_MANIFEST } from './pitch_book';
+import { FOOTBALL_FIELD_MANIFEST } from './football_field';
 import { GENERIC_MANIFEST } from './generic';
 
 const REGISTRY: Partial<Record<TaskType, TaskManifest>> = {
@@ -27,6 +28,7 @@ const REGISTRY: Partial<Record<TaskType, TaskManifest>> = {
   precedents: PRECEDENTS_MANIFEST,
   ic_memo: IC_MEMO_MANIFEST,
   pitch_book: PITCH_BOOK_MANIFEST,
+  football_field: FOOTBALL_FIELD_MANIFEST,
 };
 
 export function manifestFor(taskType: TaskType): TaskManifest {
