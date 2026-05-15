@@ -10,6 +10,8 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { getAnthropic, SONNET_MODEL } from '@/lib/llm/anthropic';
 import { ingestEntity } from '@/lib/ingest/pipeline';
+import { resolveEntity, type ResolvedEntity } from '@/lib/lookup/resolve';
+import { getTargetSnapshot } from '@/lib/ingest/persist';
 import {
   listIndexedEntities,
   recentCorpusSnapshot,
@@ -166,6 +168,12 @@ export interface ChatAgentOptions {
     detectedTarget: { name: string; ticker?: string } | null;
     taskType: string;
   } | null;
+  /** Target the classifier identified for THIS turn. When set, the agent
+   *  resolves it, checks whether the corpus has any documents for that
+   *  target_id, and pre-emptively ingests if not — so the first
+   *  search_corpus call against this entity returns real chunks instead
+   *  of unfiltered vector-similar near-misses (Carvana → CAVA Group). */
+  currentTarget?: { name: string; ticker?: string } | null;
 }
 
 export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}): AsyncGenerator<AgentEvent> {
@@ -176,6 +184,71 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
     citations: [],
     ingestStartedAt: 0,
   };
+
+  // ---------- Entity-aware pre-ingest ----------
+  // When the classifier identified an entity for this turn, resolve it
+  // and check whether the corpus already has documents for that target_id.
+  // If not, ingest BEFORE Sonnet starts — otherwise the first
+  // search_corpus call returns vector-similar near-misses for a
+  // completely different entity (the Carvana → CAVA Group bug), Sonnet
+  // never reaches its "empty → ingest" rule, and the answer is "we
+  // don't have it" when we should have just gotten it.
+  let pinnedTarget: ResolvedEntity | null = null;
+  if (opts.currentTarget?.name) {
+    try {
+      pinnedTarget = await resolveEntity(opts.currentTarget.ticker ?? opts.currentTarget.name);
+    } catch {
+      pinnedTarget = null;
+    }
+  }
+  if (pinnedTarget) {
+    let docsForTarget = 0;
+    try {
+      const snap = await getTargetSnapshot(pinnedTarget.id);
+      docsForTarget = snap.documents;
+    } catch {
+      // Supabase unreachable — let Sonnet flow handle it; it'll explain.
+      docsForTarget = -1;
+    }
+    if (docsForTarget === 0) {
+      yield {
+        type: 'tool_call',
+        name: 'ingest_entity',
+        input: { entity: pinnedTarget.name, reason: 'corpus has 0 docs for this target' },
+      };
+      state.ingestStartedAt = Date.now();
+      const deadline = state.ingestStartedAt + INGEST_BUDGET_MS;
+      let ingestedDocs = 0;
+      let ingestedChunks = 0;
+      let ingestError: string | null = null;
+      try {
+        for await (const ev of ingestEntity(pinnedTarget.name, { mode: 'full' })) {
+          if (Date.now() > deadline) {
+            ingestError = `ingest exceeded ${INGEST_BUDGET_MS / 1000}s budget; stopped early`;
+            break;
+          }
+          if (ev.type === 'done') {
+            ingestedDocs = ev.documentsAdded;
+            ingestedChunks = ev.chunksAdded;
+          } else if (ev.type === 'cached') {
+            ingestedDocs = ev.documents;
+            ingestedChunks = ev.chunks;
+          } else if (ev.type === 'error') {
+            ingestError = ev.error;
+          }
+        }
+      } catch (err) {
+        ingestError = err instanceof Error ? err.message : 'ingest threw';
+      }
+      yield {
+        type: 'tool_result',
+        name: 'ingest_entity',
+        summary: ingestError
+          ? `ingest ${pinnedTarget.name} failed: ${ingestError}`
+          : `${pinnedTarget.name}: ${ingestedDocs} docs, ${ingestedChunks} chunks indexed`,
+      };
+    }
+  }
 
   // Build messages with history. Strip prior assistant HTML to plain text;
   // skip empty entries.
@@ -202,9 +275,12 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
     const priorContextNote = opts.priorContext?.detectedTarget?.name
       ? `\n\nPRIOR CONVERSATION CONTEXT: This conversation has been about ${opts.priorContext.detectedTarget.name}${opts.priorContext.detectedTarget.ticker ? ` (${opts.priorContext.detectedTarget.ticker})` : ''}, task=${opts.priorContext.taskType}. When the user's current message is ambiguous about the target ("the data", "their financials", "is there 2025 data"), assume they mean ${opts.priorContext.detectedTarget.name} unless they explicitly name a different entity.`
       : '';
+    const pinnedTargetNote = pinnedTarget
+      ? `\n\nPINNED TARGET FOR THIS TURN: The user's named entity is ${pinnedTarget.name}${pinnedTarget.ticker ? ` (${pinnedTarget.ticker})` : ''}, target_id="${pinnedTarget.id}". The on-demand ingest already ran for this entity, so the corpus has its filings + news indexed under this target_id. When you call search_corpus for entity-specific information, you MUST pass target_ids=["${pinnedTarget.id}"] — otherwise vector similarity may return chunks for a different entity with a similar name (e.g. CARVANA vs CAVA GROUP). Do NOT call ingest_entity for this target again; it's already been ingested for this turn.`
+      : '';
     const turnSystem = isLastTurn
-      ? `${SYSTEM_PROMPT}${priorContextNote}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
-      : `${SYSTEM_PROMPT}${priorContextNote}`;
+      ? `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
+      : `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}`;
 
     const turnMessages: Anthropic.Messages.MessageParam[] = isLastTurn
       ? [

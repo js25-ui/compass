@@ -249,10 +249,15 @@ export async function POST(request: NextRequest) {
               detected_target: scope.detected_target,
               acknowledged_pills: scope.acknowledged_pills,
             });
+            // Detected target always propagates — chat_answer paths have an
+            // empty scope but still need the classifier-identified entity
+            // threaded into the chat agent for pre-ingest.
+            if (scope.detected_target) {
+              body.detected_target = scope.detected_target;
+            }
             if (Object.keys(scope.acknowledged_scope).length > 0) {
               body.scope = { ...(scope.acknowledged_scope as ScopeAnswers), ...(body.scope ?? {}) };
               body.task_type = scope.task_type;
-              body.detected_target = scope.detected_target ?? body.detected_target;
             }
           }
         }
@@ -336,6 +341,11 @@ export async function POST(request: NextRequest) {
                 taskType: body.prior_context.task_type,
               }
             : null,
+          // Surface the THIS-TURN classified target so the agent can
+          // pre-ingest when the corpus has no documents for it — prevents
+          // the search_corpus near-miss problem where vector similarity
+          // returns chunks for a different entity with a similar name.
+          currentTarget: body.detected_target ?? null,
         })) {
           emit(event);
         }
