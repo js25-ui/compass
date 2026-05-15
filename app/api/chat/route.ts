@@ -15,6 +15,7 @@ import { runICMemoPipeline, type ICMemoScope } from '@/lib/agents/deliverables/i
 import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/deliverables/pitch_book';
 import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
 import { runFootballFieldPipeline, type FootballFieldScope } from '@/lib/agents/deliverables/football_field';
+import { runMonteCarloPipeline, type MonteCarloScope } from '@/lib/agents/deliverables/monte_carlo';
 import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
 import { computeConfidence } from '@/lib/agents/deliverables/confidence';
 import { auditCitations } from '@/lib/agents/deliverables/citation_audit';
@@ -270,7 +271,7 @@ export async function POST(request: NextRequest) {
           // Buffer the input trace and sources so we can compute citation
           // accuracy once both have streamed — pipelines emit them in
           // different orders.
-          const buffered: { inputs?: InputTrace[]; sources?: Array<{ n: number; title: string; url: string | null; meta: string }> } = {};
+          const buffered: { inputs?: InputTrace[]; sources?: Array<{ n: number; title: string; url: string | null; meta: string }>; modelInputs?: Record<string, unknown> } = {};
           let auditEmitted = false;
           const tryEmitAudit = () => {
             if (auditEmitted) return;
@@ -282,6 +283,12 @@ export async function POST(request: NextRequest) {
           for await (const event of deliverable.gen) {
             relayDeliverableEvent(event, deliverable.label, emit);
             const ev = event as { type: string; inputs?: unknown; sources?: unknown; text?: string };
+            if (ev.type === 'inputs_resolved' && ev.inputs && typeof ev.inputs === 'object' && !Array.isArray(ev.inputs)) {
+              // LBO and DCF emit inputs_resolved with the full pure-function
+              // input object (entryEV, initialRevenue, ebitdaMargin, etc.).
+              // Capture it so Monte Carlo follow-ups can overlay this run.
+              buffered.modelInputs = ev.inputs as Record<string, unknown>;
+            }
             if (ev.type === 'inputs_traced' && Array.isArray(ev.inputs)) {
               buffered.inputs = ev.inputs as InputTrace[];
               tryEmitAudit();
@@ -297,6 +304,22 @@ export async function POST(request: NextRequest) {
                 emit({ type: 'hallucination_gate', deliverable: deliverable.label, leaks });
               }
             }
+          }
+          // After the run, re-emit deliverable_context with the underlying
+          // model's pure-function inputs folded into scope under reserved
+          // `_model_*` keys. Monte Carlo (a follow-up overlay) reads these
+          // to rebuild the base inputs without preflighting XBRL again.
+          if (buffered.modelInputs) {
+            const augmentedScope = { ...(body.scope ?? {}) } as Record<string, unknown>;
+            for (const [k, v] of Object.entries(buffered.modelInputs)) {
+              augmentedScope[`_model_${k}`] = v;
+            }
+            emit({
+              type: 'deliverable_context',
+              task_type: body.task_type,
+              detected_target: body.detected_target ?? null,
+              scope: augmentedScope,
+            });
           }
           return;
         }
@@ -369,6 +392,15 @@ function pickDeliverableGenerator(
     case 'football_field':
       return { label: 'football_field', gen: runFootballFieldPipeline({ query, scope: scope as FootballFieldScope, detectedTarget }) };
     case 'monte_carlo':
+      return {
+        label: 'monte_carlo',
+        gen: runMonteCarloPipeline({
+          query,
+          scope: scope as MonteCarloScope,
+          detectedTarget,
+          priorContext: body.prior_context ?? null,
+        }),
+      };
     case 'excel_model':
       return { label: tt, gen: unsupportedDeliverable(tt) };
     default:
@@ -377,7 +409,6 @@ function pickDeliverableGenerator(
 }
 
 const UNSUPPORTED_LABELS: Record<string, string> = {
-  monte_carlo: 'Monte Carlo simulation',
   excel_model: 'Excel model export',
 };
 
