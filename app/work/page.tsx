@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 
 export interface WorkTrace {
@@ -22,30 +22,26 @@ export interface WorkTrace {
 
 const STORAGE_KEY = 'compass:lastWorkTrace';
 
-export default function WorkPage() {
-  const [trace, setTrace] = useState<WorkTrace | null>(null);
-  const [hydrated, setHydrated] = useState(false);
+function subscribeToTrace(callback: () => void): () => void {
+  const handler = (e: StorageEvent) => { if (e.key === STORAGE_KEY) callback(); };
+  window.addEventListener('storage', handler);
+  return () => window.removeEventListener('storage', handler);
+}
 
-  useEffect(() => {
-    setHydrated(true);
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setTrace(JSON.parse(raw) as WorkTrace);
-    } catch {
-      setTrace(null);
-    }
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        try { setTrace(e.newValue ? (JSON.parse(e.newValue) as WorkTrace) : null); } catch { /* ignore */ }
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
-  if (!hydrated) {
-    return <div className="work-page" />;
+function readTrace(): WorkTrace | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as WorkTrace) : null;
+  } catch {
+    return null;
   }
+}
+
+export default function WorkPage() {
+  // useSyncExternalStore is the React-correct way to read from a non-React
+  // store (localStorage). The third argument is the SSR snapshot — null
+  // because there is no trace until the client mounts.
+  const trace = useSyncExternalStore(subscribeToTrace, readTrace, () => null);
 
   if (!trace) {
     return (
@@ -62,7 +58,9 @@ export default function WorkPage() {
     );
   }
 
-  const duration = trace.finishedAt ? trace.finishedAt - trace.startedAt : Date.now() - trace.startedAt;
+  // finishedAt is always set when writeWorkTrace persists; default to 0 if a
+  // legacy/partial trace lacks it rather than calling Date.now() at render.
+  const duration = trace.finishedAt ? trace.finishedAt - trace.startedAt : 0;
   const taskLabel = trace.taskType ? trace.taskType.replace(/_/g, ' ') : 'chat';
   const targetLabel = trace.detectedTarget
     ? `${trace.detectedTarget.name}${trace.detectedTarget.ticker ? ` (${trace.detectedTarget.ticker})` : ''}`

@@ -199,50 +199,56 @@ type ChatEvent =
   | { type: 'done'; latencyMs: number; turns?: number }
   | { type: 'error'; error: string };
 
+/**
+ * Hydrate prior conversation turns from localStorage at first render. This
+ * runs as a lazy useState initializer (not an effect), which means React
+ * never sees the empty-then-populated state transition. Server-rendered
+ * pass returns []; client mount picks up the persisted turns directly.
+ */
+function loadInitialTurns(): Turn[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('compass:conversationTurns');
+    if (!raw) return [];
+    const restored = JSON.parse(raw) as Turn[];
+    if (!Array.isArray(restored) || restored.length === 0) return [];
+    return restored
+      .filter(t => t.role === 'user' || (t.role === 'assistant' && t.phase === 'done'))
+      .slice(-50);
+  } catch {
+    return [];
+  }
+}
+
 function ConversationView() {
   const params = useSearchParams();
   const initialQ = params.get('q') ?? '';
 
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<Turn[]>(loadInitialTurns);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const seededRef = useRef<string | null>(null);
-  const idRef = useRef(0);
-  const hydratedRef = useRef(false);
-
-  // Hydrate prior turns from localStorage on mount so a refresh doesn't
-  // wipe the conversation. We only restore turns that are no longer
-  // streaming — any in-flight stream from a prior session is orphaned
-  // and would dangle if we kept it in 'streaming' phase.
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    hydratedRef.current = true;
-    try {
-      const raw = localStorage.getItem('compass:conversationTurns');
-      if (!raw) return;
-      const restored = JSON.parse(raw) as Turn[];
-      if (!Array.isArray(restored) || restored.length === 0) return;
-      const safe = restored
-        .filter(t => t.role === 'user' || (t.role === 'assistant' && t.phase === 'done'))
-        .slice(-50);
-      if (safe.length === 0) return;
-      const maxId = safe.reduce((m, t) => Math.max(m, t.id), 0);
-      idRef.current = maxId;
-      setTurns(safe);
-      // If a query was passed via ?q=, only seed it if the most-recent
-      // user turn doesn't already match — avoid double-firing on refresh.
-      if (initialQ) {
-        const lastUser = [...safe].reverse().find((t): t is UserTurn => t.role === 'user');
-        if (lastUser && lastUser.text === initialQ) {
-          seededRef.current = initialQ;
-        }
-      }
-    } catch {
-      /* corrupt or unavailable — fresh start */
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const seededRef = useRef<string | null>(
+    // If the URL ?q= matches the most-recent restored user turn, mark it as
+    // already seeded so the initial-query useEffect below doesn't re-fire it.
+    (() => {
+      if (typeof window === 'undefined' || !initialQ) return null;
+      try {
+        const raw = localStorage.getItem('compass:conversationTurns');
+        if (!raw) return null;
+        const restored = JSON.parse(raw) as Turn[];
+        if (!Array.isArray(restored)) return null;
+        const lastUser = [...restored].reverse().find((t): t is UserTurn => t.role === 'user');
+        return lastUser && lastUser.text === initialQ ? initialQ : null;
+      } catch { return null; }
+    })(),
+  );
+  const idRef = useRef<number>(
+    (() => {
+      const restored = loadInitialTurns();
+      return restored.reduce((m, t) => Math.max(m, t.id), 0);
+    })(),
+  );
 
   // Persist on every change. Trim to last 50 turns to keep localStorage
   // bounded — older context isn't useful for follow-up detection anyway.

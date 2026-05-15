@@ -43,23 +43,40 @@ export default function LibraryPage() {
   const [docTypeFilter, setDocTypeFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [daysBack, setDaysBack] = useState(30);
+  // Bump refreshNonce to force the fetch effect to re-run (e.g. when the
+  // user clicks Refresh while daysBack is unchanged).
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
-  const load = (days: number) => {
-    setLoading(true);
-    setError(null);
-    fetch(`/api/library?limit=300&days_back=${days}`)
-      .then(r => r.json())
-      .then((j: LibraryResponse) => {
-        if (j.error) throw new Error(j.error);
-        setData(j);
-      })
-      .catch(err => setError(err instanceof Error ? err.message : 'load failed'))
-      .finally(() => setLoading(false));
-  };
+  // Fetch entirely inside an async IIFE so every setState lands after at
+  // least one await — satisfies react-hooks/set-state-in-effect by keeping
+  // updates out of the effect's synchronous body.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/library?limit=300&days_back=${daysBack}`);
+        const j = (await res.json()) as LibraryResponse;
+        if (cancelled) return;
+        if (j.error) {
+          setError(j.error);
+          setData(null);
+        } else {
+          setData(j);
+          setError(null);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'load failed');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [daysBack, refreshNonce]);
 
-  useEffect(() => { load(daysBack); }, [daysBack]);
+  const triggerRefresh = () => setRefreshNonce(n => n + 1);
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data]);
   const sourceStats = data?.sourceStats ?? [];
 
   const docTypes = useMemo(() => {
@@ -160,7 +177,7 @@ export default function LibraryPage() {
           <option value={180}>Last 180 days</option>
           <option value={365}>Last year</option>
         </select>
-        <button className="library-refresh" onClick={() => load(daysBack)} disabled={loading}>
+        <button className="library-refresh" onClick={triggerRefresh} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
