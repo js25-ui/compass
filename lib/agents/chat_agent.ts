@@ -136,6 +136,12 @@ export interface AgentSourceCitation {
   isPrimary: boolean;
   similarity: number;
   targetId: string | null;
+  /** Section tag (income_statement, mdna, etc.) so the Work tab can show
+   *  which sections the chat agent actually pulled from for this answer. */
+  section?: string;
+  /** similarity × section-weight after re-rank — useful for diagnosing
+   *  why a chunk landed where it did. */
+  rerankScore?: number;
 }
 
 export type AgentEvent =
@@ -499,6 +505,8 @@ function formatSearchResult(chunks: RetrievedChunk[], state: AgentState, label: 
       isPrimary: chunk.isPrimarySource,
       similarity: Number(chunk.similarity.toFixed(3)),
       targetId: chunk.targetId,
+      section: chunk.section,
+      rerankScore: chunk.rerankScore != null ? Number(chunk.rerankScore.toFixed(3)) : undefined,
     });
     return {
       n,

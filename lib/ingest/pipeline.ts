@@ -11,6 +11,7 @@ import {
   fetchNews,
   type PendingDocument,
 } from './sources';
+import { seedFromXbrl } from '@/lib/data/financial_facts';
 import {
   bumpLastQueried,
   getTargetSnapshot,
@@ -65,6 +66,17 @@ export async function* ingestEntity(
     try {
       const docs = await fetchEdgarXbrl(entity);
       collected.push(...docs);
+      // Also write the structured facts into financial_facts so the chat
+      // agent's XBRL pre-fetch (lookup_facts) and the DCF/LBO preflight
+      // share one source of truth. Without this, on-demand chat ingest
+      // populated documents.metadata.facts but left financial_facts empty,
+      // so quantitative-metric queries silently fell back to noisy chunk
+      // retrieval.
+      try {
+        await seedFromXbrl(entity.id, entity.cik);
+      } catch (err) {
+        yield { type: 'source_error', source: 'edgar_xbrl', error: `financial_facts seed: ${(err as Error).message}` };
+      }
       yield { type: 'fetched', source: 'edgar_xbrl', count: docs.length, durationMs: Date.now() - t0 };
       await recordIngestRun({
         targetId: entity.id, source: 'edgar_xbrl', status: 'success',
