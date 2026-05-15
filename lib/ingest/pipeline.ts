@@ -29,18 +29,18 @@ import type { IngestEvent, IngestOptions, SourceName } from './types';
 const DEFAULT_MAX_FILINGS = 10;
 const DEFAULT_MAX_ARTICLES = 15;
 const MIN_CHUNK_CHARS = 200;
-// Per-doc cap is doc-type-dependent. SEC filings (10-Q, 10-K) are long and
-// have multiple high-value sections (income statement, MD&A, cash flow,
-// balance sheet) — keeping 3 chunks per filing means we only keep the
-// cover page + ToC + forward-looking-statements boilerplate. Keep 30 per
-// filing so the income statement and MD&A actually make it in. News
-// articles are short and don't need more than 2.
-const MAX_CHUNKS_PER_FILING = 30;
+// Per-doc cap. SEC filings are long but the section-priority sort below
+// keeps the most-valuable sections (income statement, MD&A, cash flow,
+// balance sheet) first, so 15 is enough to cover the financial-statement
+// tables + MD&A commentary for the typical filing. News stays at 2.
+const MAX_CHUNKS_PER_FILING = 15;
 const MAX_CHUNKS_PER_NEWS = 2;
-// Total ceiling across all docs in one ingest. Was 20 — wildly under-sized
-// for entities with multiple filings. 200 covers 5-6 filings worth of
-// well-tagged chunks plus headroom for news + XBRL.
-const MAX_TOTAL_CHUNKS = 200;
+// Total ceiling across all docs in one ingest. Tuned against Voyage's
+// free-tier 3-RPM rate limit: batches of 96 chunks each with a 21s
+// inter-batch wait means 100 chunks ≈ 1 batch + 1 retry buffer ≈ <30s
+// embedding wall-clock. Combined with EDGAR/news fetches (~15s) and
+// Supabase writes (~3s), the whole ingest fits in the 60s function cap.
+const MAX_TOTAL_CHUNKS = 100;
 
 // Section preference ordering. When we have more chunks for a doc than
 // MAX_CHUNKS_PER_FILING, keep the ones from the most valuable sections
