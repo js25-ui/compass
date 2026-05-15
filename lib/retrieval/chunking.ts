@@ -30,15 +30,6 @@ export interface Chunk {
   section?: SectionTag;
 }
 
-/**
- * Hard upper bound enforced regardless of sentence detection: filings often
- * contain long XBRL preambles or numeric tables with no period punctuation,
- * which makes sentence-based splitting return a single mega-"sentence". We
- * cap each chunk to MAX_CHARS so Voyage's 32K-token-per-input limit is never
- * breached even when the input is messy.
- */
-const MAX_CHARS = 4 * 4 * 1024; // ~4K tokens at 4 chars/token
-
 export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
   const targetTokens = opts.targetTokens ?? 512;
   const overlapTokens = opts.overlapTokens ?? 50;
@@ -52,7 +43,11 @@ export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
     return [{ index: 0, content: text, charStart: 0, charEnd: text.length }];
   }
 
-  const sentences = splitSentences(text).flatMap(forceSplit);
+  // When a "sentence" has no period (inline-XBRL filings have a 200KB+ run
+  // of XBRL metadata with no sentence terminators), forceSplit windows it
+  // into targetChars-sized pieces so we end up with properly-sized chunks
+  // (~2KB each) instead of one 200KB mega-chunk.
+  const sentences = splitSentences(text).flatMap(s => forceSplit(s, targetChars));
   const chunks: Chunk[] = [];
   let buffer = '';
   let bufferStart = 0;
@@ -61,15 +56,21 @@ export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
   for (const sentence of sentences) {
     const sentenceLen = sentence.length;
     if (buffer.length + sentenceLen + 1 > targetChars && buffer.length > 0) {
+      // Capture buffer length BEFORE reassigning buffer to overlap —
+      // otherwise the advance math below uses the post-reassign length
+      // (== overlap.length) and bufferStart never advances past 0,
+      // breaking every position-based downstream consumer (section
+      // tagger, citation locator, etc.).
+      const flushedLen = buffer.length;
       chunks.push({
         index: chunks.length,
         content: buffer.trim(),
         charStart: bufferStart,
-        charEnd: bufferStart + buffer.length,
+        charEnd: bufferStart + flushedLen,
       });
-      const overlap = buffer.slice(Math.max(0, buffer.length - overlapChars));
+      const overlap = buffer.slice(Math.max(0, flushedLen - overlapChars));
       buffer = overlap;
-      bufferStart = bufferStart + (buffer.length - overlap.length);
+      bufferStart = bufferStart + (flushedLen - overlap.length);
     }
     if (buffer.length === 0) {
       bufferStart = cursor;
@@ -95,12 +96,15 @@ export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
   return chunks;
 }
 
-/** Hard-split a "sentence" that's too long into MAX_CHARS-sized windows. */
-function forceSplit(sentence: string): string[] {
-  if (sentence.length <= MAX_CHARS) return [sentence];
+/** Hard-split a "sentence" that's too long into windowed pieces. The window
+ *  size is the same targetChars the packer is aiming for — so a sentence-
+ *  free run of text yields the same chunk count it would if sentence
+ *  boundaries had been present. */
+function forceSplit(sentence: string, windowChars: number): string[] {
+  if (sentence.length <= windowChars) return [sentence];
   const out: string[] = [];
-  for (let i = 0; i < sentence.length; i += MAX_CHARS) {
-    out.push(sentence.slice(i, i + MAX_CHARS));
+  for (let i = 0; i < sentence.length; i += windowChars) {
+    out.push(sentence.slice(i, i + windowChars));
   }
   return out;
 }
