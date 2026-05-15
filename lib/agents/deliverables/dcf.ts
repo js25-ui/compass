@@ -29,7 +29,7 @@ import {
 import { preflight } from '@/lib/data/preflight';
 import { DCF_MANIFEST as DCF_DATA_MANIFEST } from '@/lib/models/manifests';
 import { pickAnnualHistory } from '@/lib/data/financial_facts';
-import { runDCF, DCFComputeError, type DCFInputs, type DCFResult, type ProjectionRow } from '@/lib/models/dcf';
+import { runDCF, DCFComputeError, type DCFInputs, type DCFResult } from '@/lib/models/dcf';
 
 export interface DCFScope {
   projection_years?: string | number;
@@ -120,7 +120,6 @@ export async function* runDCFPipeline(opts: {
   const terminalGrowthPct = Number(opts.scope.terminal_growth_rate ?? 2.5);
   const g = terminalGrowthPct / 100;
   const taxRatePct = Number(opts.scope.tax_rate ?? 25);
-  const taxRate = taxRatePct / 100;
   const terminalMethod = (opts.scope.terminal_method ?? 'gordon_growth') as 'gordon_growth' | 'exit_multiple';
   const exitMultiple = opts.scope.exit_multiple != null ? Number(opts.scope.exit_multiple) : null;
 

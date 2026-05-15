@@ -12,7 +12,6 @@ import { lightPreflight } from '@/lib/data/preflight';
 import {
   type DeliverableEvent,
   escape,
-  note,
   refusalCard,
   section,
   sonnetJson,

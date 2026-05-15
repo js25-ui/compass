@@ -187,8 +187,10 @@ export async function* runLBOPipeline(opts: {
   const initialRevenue = baseRevenue;
   const ebitdaMargin = baseEbitdaMargin;
 
-  const ltdHistory = pre.history.long_term_debt ?? [];
-  const _existingDebt = ltdHistory[0]?.value ?? 0;     // reserved for refinement; not yet wired into LBO calc
+  // Long-term debt history is available via pre.history.long_term_debt
+  // for future refinement (subtracting existing debt from sponsor equity).
+  // Not yet wired into the calc — the model treats entry EV as the full
+  // commitment.
 
   // Entry EV is mandatory — the clarify card always asks for it, and we never
   // silently fall back to a derived number. If somehow scope.entry_ev is

@@ -15,7 +15,6 @@ interface RawEntry {
 
 let byTicker: Map<string, SecTickerEntry> | null = null;
 let byCik: Map<string, SecTickerEntry> | null = null;
-let byNormalizedName: Map<string, SecTickerEntry> | null = null;
 let allEntries: SecTickerEntry[] | null = null;
 
 export function normalizeName(name: string): string {
@@ -39,7 +38,6 @@ async function load(): Promise<void> {
 
   const t = new Map<string, SecTickerEntry>();
   const c = new Map<string, SecTickerEntry>();
-  const n = new Map<string, SecTickerEntry>();
   const all: SecTickerEntry[] = [];
 
   for (const raw of Object.values(parsed)) {
@@ -50,13 +48,11 @@ async function load(): Promise<void> {
     };
     t.set(entry.ticker, entry);
     c.set(entry.cik, entry);
-    n.set(normalizeName(entry.name), entry);
     all.push(entry);
   }
 
   byTicker = t;
   byCik = c;
-  byNormalizedName = n;
   allEntries = all;
 }
 

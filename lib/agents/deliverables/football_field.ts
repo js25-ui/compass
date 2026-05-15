@@ -24,7 +24,6 @@ import {
   type DeliverableEvent,
   type InputTrace,
   escape,
-  fmtMillions,
   note,
   refusalCard,
   section,

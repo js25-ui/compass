@@ -13,7 +13,6 @@ import {
   type InputTrace,
   escape,
   fmtMillions,
-  fmtPctRaw,
   note,
   refusalCard,
   section,

@@ -12,9 +12,7 @@ import {
   type DeliverableEvent,
   escape,
   fmtMillions,
-  fmtMultiple,
   fmtPct,
-  fmtPctRaw,
   note,
   refusalCard,
   section,
@@ -71,7 +69,7 @@ Draft executive summary, key metrics, thesis points, and recommended action grou
   return sonnetJson<ExecAndRecOut>({ systemPrompt: EXEC_PROMPT, userMessage, maxTokens: 2000 });
 }
 
-async function collectFromGenerator<T>(
+async function collectFromGenerator(
   generator: AsyncGenerator<DeliverableEvent, void>,
 ): Promise<{ html: string; error?: string }> {
   let html = '';
