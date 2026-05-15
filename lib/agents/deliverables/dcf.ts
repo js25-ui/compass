@@ -29,6 +29,7 @@ import {
 import { preflight } from '@/lib/data/preflight';
 import { DCF_MANIFEST as DCF_DATA_MANIFEST } from '@/lib/models/manifests';
 import { pickAnnualHistory } from '@/lib/data/financial_facts';
+import { runDCF, DCFComputeError, type DCFInputs, type DCFResult, type ProjectionRow } from '@/lib/models/dcf';
 
 export interface DCFScope {
   projection_years?: string | number;
@@ -41,41 +42,11 @@ export interface DCFScope {
   [k: string]: unknown;
 }
 
-interface ProjectionRow {
-  year: number;
-  revenue: number;
-  ebit: number;
-  taxedEbit: number;
-  capex: number;
-  fcf: number;
-  discountFactor: number;
-  pvFcf: number;
-}
-
-interface DCFResult {
-  inputs: {
-    waccPct: number;
-    terminalGrowthPct: number;
-    taxRatePct: number;
-    capexPctRevenue: number;
-    ebitMarginPct: number;
-    historicalRevenueCagrPct: number;
-    projectionYears: number;
-    terminalMethod: 'gordon_growth' | 'exit_multiple';
-    exitMultiple: number | null;
-  };
-  baseYear: { revenue: number; ebit: number; ebitda: number | null; period: string };
-  projections: ProjectionRow[];
-  terminalValue: number;
-  pvTerminal: number;
-  enterpriseValue: number;
-  crosscheck: { evRevenueX: number | null; evEbitX: number | null };
-  /** WACC × g sensitivity matrix of EV ($M). */
-  sensitivity: { waccs: number[]; growths: number[]; matrix: number[][] };
-}
+/** Pipeline carries the XBRL period in the baseYear cell; the pure DCFResult
+ *  doesn't know about filing periods. We add the period back when rendering. */
+type DCFResultWithPeriod = DCFResult & { baseYear: DCFResult['baseYear'] & { period: string } };
 
 const DEFAULT_COMPUTED_WACC_PCT = 9.0;     // placeholder until we plug CAPM
-const PROJECTION_GROWTH_DECAY_FRAC = 0.5;  // pull yearly growth halfway from CAGR toward terminal each step
 
 export async function* runDCFPipeline(opts: {
   query: string;
@@ -153,100 +124,46 @@ export async function* runDCFPipeline(opts: {
   const terminalMethod = (opts.scope.terminal_method ?? 'gordon_growth') as 'gordon_growth' | 'exit_multiple';
   const exitMultiple = opts.scope.exit_multiple != null ? Number(opts.scope.exit_multiple) : null;
 
-  if (terminalMethod === 'gordon_growth' && g >= wacc) {
-    yield {
-      type: 'token',
-      text: refusalCard(target, 'Gordon Growth divergence',
-        `Terminal growth ${(g * 100).toFixed(1)}% ≥ WACC ${(wacc * 100).toFixed(1)}%. Gordon Growth requires g < WACC. Lower terminal growth or raise WACC and re-run.`),
-    };
-    yield { type: 'done' };
-    return;
-  }
-
   yield {
     type: 'progress',
     step: `Projecting ${projectionYears}y · WACC ${waccPct.toFixed(2)}% · g ${terminalGrowthPct.toFixed(2)}% · tax ${taxRatePct.toFixed(0)}%`,
   };
 
-  // Decaying growth rate from historical CAGR → terminal g across N years.
-  const projections: ProjectionRow[] = [];
-  let currentRevenue = baseRevenue;
-  let currentGrowth = historicalCagr;
-  for (let t = 1; t <= projectionYears; t++) {
-    // Decay growth toward terminal each year. After projectionYears the growth
-    // approximately equals g.
-    currentGrowth = currentGrowth - (currentGrowth - g) * PROJECTION_GROWTH_DECAY_FRAC;
-    currentRevenue = currentRevenue * (1 + currentGrowth);
-    const ebit = currentRevenue * baseEbitMargin;
-    const taxedEbit = ebit * (1 - taxRate);
-    const capexProj = currentRevenue * baseCapexPctRevenue;
-    const fcf = taxedEbit - capexProj;
-    const discountFactor = Math.pow(1 + wacc, t);
-    const pvFcf = fcf / discountFactor;
-    projections.push({
-      year: t,
-      revenue: currentRevenue,
-      ebit,
-      taxedEbit,
-      capex: capexProj,
-      fcf,
-      discountFactor,
-      pvFcf,
-    });
-  }
-
-  const lastFcf = projections[projections.length - 1].fcf;
-  const lastEbitda = projections[projections.length - 1].ebit;  // we don't separate D&A — treat as EBIT-anchored multiple
-
-  let terminalValue: number;
-  if (terminalMethod === 'gordon_growth') {
-    terminalValue = (lastFcf * (1 + g)) / (wacc - g);
-  } else {
-    const mult = exitMultiple ?? 10;
-    terminalValue = lastEbitda * mult;
-  }
-  const pvTerminal = terminalValue / Math.pow(1 + wacc, projectionYears);
-
-  const enterpriseValue = projections.reduce((sum, p) => sum + p.pvFcf, 0) + pvTerminal;
-
-  const crosscheck = {
-    evRevenueX: baseRevenue > 0 ? enterpriseValue / baseRevenue : null,
-    evEbitX: baseEbit > 0 ? enterpriseValue / baseEbit : null,
-  };
-
-  // Sensitivity grid: WACC ±100bps × g ±100bps.
-  const waccs = [waccPct - 1, waccPct - 0.5, waccPct, waccPct + 0.5, waccPct + 1].map(v => v / 100);
-  const growths = [terminalGrowthPct - 1, terminalGrowthPct - 0.5, terminalGrowthPct, terminalGrowthPct + 0.5, terminalGrowthPct + 1].map(v => v / 100);
-  const matrix = waccs.map(w => growths.map(gg => recomputeEV({
-    projections, lastFcf, lastEbitda, projectionYears,
-    wacc: w, g: gg, terminalMethod, exitMultiple,
-  })));
-
-  const result: DCFResult = {
-    inputs: {
+  let pureResult: DCFResult;
+  try {
+    pureResult = runDCF({
+      baseRevenue,
+      baseEbit,
+      baseEbitMargin,
+      baseCapexPctRevenue,
+      historicalCagr,
+      projectionYears,
       waccPct,
       terminalGrowthPct,
       taxRatePct,
-      capexPctRevenue: baseCapexPctRevenue * 100,
-      ebitMarginPct: baseEbitMargin * 100,
-      historicalRevenueCagrPct: historicalCagr * 100,
-      projectionYears,
       terminalMethod,
       exitMultiple,
-    },
-    baseYear: {
-      revenue: baseRevenue,
-      ebit: baseEbit,
-      ebitda: null,
-      period: revenue[0].period,
-    },
-    projections,
-    terminalValue,
-    pvTerminal,
-    enterpriseValue,
-    crosscheck,
-    sensitivity: { waccs: waccs.map(v => v * 100), growths: growths.map(v => v * 100), matrix },
+    });
+  } catch (err) {
+    if (err instanceof DCFComputeError && err.field === 'terminal_growth_rate') {
+      yield {
+        type: 'token',
+        text: refusalCard(target, 'Gordon Growth divergence',
+          `Terminal growth ${terminalGrowthPct.toFixed(1)}% ≥ WACC ${waccPct.toFixed(1)}%. Gordon Growth requires g < WACC. Lower terminal growth or raise WACC and re-run.`),
+      };
+      yield { type: 'done' };
+      return;
+    }
+    yield { type: 'error', error: err instanceof Error ? err.message : 'DCF compute failed' };
+    yield { type: 'done' };
+    return;
+  }
+
+  const result: DCFResultWithPeriod = {
+    ...pureResult,
+    baseYear: { ...pureResult.baseYear, period: revenue[0].period },
   };
+  const { enterpriseValue, terminalValue, pvTerminal, projections } = pureResult;
 
   yield {
     type: 'progress',
@@ -308,26 +225,6 @@ export async function* runDCFPipeline(opts: {
   yield { type: 'done' };
 }
 
-function recomputeEV(args: {
-  projections: ProjectionRow[];
-  lastFcf: number;
-  lastEbitda: number;
-  projectionYears: number;
-  wacc: number;
-  g: number;
-  terminalMethod: 'gordon_growth' | 'exit_multiple';
-  exitMultiple: number | null;
-}): number {
-  if (args.terminalMethod === 'gordon_growth' && args.g >= args.wacc) return NaN;
-  const tv = args.terminalMethod === 'gordon_growth'
-    ? (args.lastFcf * (1 + args.g)) / (args.wacc - args.g)
-    : args.lastEbitda * (args.exitMultiple ?? 10);
-  const pvTerminal = tv / Math.pow(1 + args.wacc, args.projectionYears);
-  // Re-discount each FCF at the new WACC.
-  const pvFcfs = args.projections.reduce((sum, p) => sum + p.fcf / Math.pow(1 + args.wacc, p.year), 0);
-  return pvFcfs + pvTerminal;
-}
-
 function refusalCard(target: string, headline: string, body: string): string {
   return [
     `<div class="memo-rec-banner" style="border-left-color:#f87171">`,
@@ -355,7 +252,7 @@ function renderPreflightFailureHtml(pre: { reason: string; missingMetrics: strin
   ].filter(Boolean).join('\n');
 }
 
-function renderDCFHtml(target: string, r: DCFResult, ticker: string | null): string {
+function renderDCFHtml(target: string, r: DCFResultWithPeriod, ticker: string | null): string {
   const targetLabel = ticker ? `${target} (${ticker})` : target;
 
   // Headline EV banner
