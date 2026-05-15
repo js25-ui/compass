@@ -18,6 +18,8 @@ import {
   searchChunks,
   type RetrievedChunk,
 } from '@/lib/retrieval/vector_search';
+import { detectFactsLookup } from '@/lib/retrieval/query_intent';
+import { lookupXbrlFacts, summarizeFactsForPrompt } from '@/lib/retrieval/xbrl_lookup';
 
 const MAX_TURNS = 3;
 const INGEST_BUDGET_MS = 25_000;
@@ -250,6 +252,38 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
     }
   }
 
+  // ---------- XBRL fact pre-fetch ----------
+  // If the user is asking about specific financial metrics for a pinned
+  // target with a CIK, hit financial_facts directly before Sonnet starts.
+  // The chunk re-ranker biases retrieval toward the income statement /
+  // MD&A, but XBRL values are canonically structured and don't depend on
+  // the model finding the right table — surface them in the system prompt
+  // so Sonnet can cite specific numbers even if a vector chunk for that
+  // exact metric never surfaces.
+  let xbrlSummary = '';
+  if (pinnedTarget?.cik) {
+    const requestedMetrics = detectFactsLookup(query);
+    if (requestedMetrics.length > 0) {
+      try {
+        const xbrl = await lookupXbrlFacts({
+          targetId: pinnedTarget.id,
+          metrics: requestedMetrics,
+          periodsBack: 3,
+        });
+        if (xbrl.values.length > 0) {
+          xbrlSummary = summarizeFactsForPrompt(pinnedTarget.name, xbrl);
+          yield {
+            type: 'tool_result',
+            name: 'lookup_facts',
+            summary: `XBRL facts pre-fetched for ${pinnedTarget.name}: ${xbrl.values.map(v => v.metric).join(', ')} (${xbrl.values.length}/${requestedMetrics.length} metrics)`,
+          };
+        }
+      } catch {
+        // Soft-fail — Sonnet still has the chunk-retrieval path.
+      }
+    }
+  }
+
   // Build messages with history. Strip prior assistant HTML to plain text;
   // skip empty entries.
   const historyMessages: Anthropic.Messages.MessageParam[] = (opts.history ?? [])
@@ -281,9 +315,12 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
   2. Then immediately WRITE THE FINAL ANSWER in your next turn.
 Do NOT call search_corpus a second time on the same target — the first targeted search returns everything we have indexed, additional searches won't surface new content and will use up the function-timeout budget. Do NOT call ingest_entity for this target again; it's already been ingested for this turn.`
       : '';
+    const xbrlNote = xbrlSummary
+      ? `\n\n${xbrlSummary}\n\nThese XBRL values come straight from SEC EDGAR companyfacts — they're more authoritative than any chunk excerpt for quantitative metrics. Cite them in your answer as 'per SEC XBRL company facts' when the user is asking about specific numbers. Vector chunks may still be useful for color (MD&A commentary, segment breakdowns), but treat the XBRL values as the source of truth for any metric named above.`
+      : '';
     const turnSystem = isLastTurn
-      ? `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
-      : `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}`;
+      ? `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}${xbrlNote}\n\nFINAL TURN: tool budget exhausted. Write the final answer in HTML now using only the tool results already in this conversation.`
+      : `${SYSTEM_PROMPT}${priorContextNote}${pinnedTargetNote}${xbrlNote}`;
 
     const turnMessages: Anthropic.Messages.MessageParam[] = isLastTurn
       ? [
