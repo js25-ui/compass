@@ -1321,6 +1321,27 @@ button { font-family: inherit; }
   font-style: italic;
 }
 
+.excel-export-btn {
+  background: #fff;
+  color: #0a0a0a;
+  border: none;
+  padding: 10px 20px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  cursor: pointer;
+  font-family: inherit;
+  margin-top: 6px;
+}
+.excel-export-btn:hover:not(:disabled) { background: #ddd; }
+.excel-export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #2a2a2a;
+  color: #888;
+}
+
 .work-activity {
   list-style: none;
   padding: 0;

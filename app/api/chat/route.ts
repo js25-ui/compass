@@ -365,7 +365,10 @@ function pickDeliverableGenerator(
   const scope = (body.scope ?? {}) as Record<string, unknown>;
   const hasScope = Object.keys(scope).length > 0;
   const tt = body.task_type;
-  if (!tt || !hasScope) return null;
+  if (!tt) return null;
+  // Most deliverables require scope answers. Excel export is the exception:
+  // it has no scope card — the export is driven entirely off prior_context.
+  if (tt !== 'excel_model' && !hasScope) return null;
 
   switch (tt) {
     case 'lbo':
@@ -402,26 +405,90 @@ function pickDeliverableGenerator(
         }),
       };
     case 'excel_model':
-      return { label: tt, gen: unsupportedDeliverable(tt) };
+      return {
+        label: 'excel_model',
+        gen: excelExportAction(body),
+      };
     default:
       return null;
   }
 }
 
-const UNSUPPORTED_LABELS: Record<string, string> = {
-  excel_model: 'Excel model export',
-};
+/**
+ * Excel-export is a download, not a streaming chat answer. The "deliverable"
+ * the chat emits is an action card pointing at the binary endpoint and
+ * surfacing what's about to be exported. The user clicks to download.
+ *
+ * Requires prior_context to carry _model_* keys (LBO or DCF). Otherwise
+ * refuses with a clean explanation of what's missing.
+ */
+async function* excelExportAction(body: Body): AsyncGenerator<DeliverableEvent, void> {
+  const prior = body.prior_context;
+  const supported: Record<string, true> = { lbo: true, lbo_analysis: true, dcf: true };
+  if (!prior || !supported[prior.task_type]) {
+    yield {
+      type: 'token',
+      text: `<div class="memo-rec-banner" style="border-left-color:#fbbf24">
+        <div class="memo-rec-label" style="color:#fbbf24">EXCEL EXPORT NEEDS A SOURCE MODEL</div>
+        <div class="memo-rec-headline">Run an LBO or DCF first, then ask "export to Excel".</div>
+      </div>
+      <p>Excel export packages a completed LBO or DCF run as a downloadable .xlsx — Inputs / Model / Outputs / Sensitivity / Sources tabs with citations as cell comments. It needs the prior model's inputs in conversation context to know what to export.</p>
+      <p class="memo-disclaimer">Trading comps, precedents, IC memo, and pitch book export aren't wired yet — the static-value workbook only covers numeric models for now.</p>`,
+    };
+    yield { type: 'done' };
+    return;
+  }
+  const rawTask = prior.task_type === 'lbo_analysis' ? 'lbo' : prior.task_type;
+  const exportPayload = {
+    task_type: rawTask,
+    detected_target: prior.detected_target,
+    scope: prior.scope,
+  };
+  const exportBody = JSON.stringify(exportPayload);
+  const dataUri = `data:application/json;base64,${Buffer.from(exportBody).toString('base64')}`;
+  const targetLabel = prior.detected_target?.name
+    ? `${prior.detected_target.name}${prior.detected_target.ticker ? ` (${prior.detected_target.ticker})` : ''}`
+    : 'this model';
+  const filename = `${(prior.detected_target?.name ?? 'model').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${rawTask}-${new Date().toISOString().slice(0, 10)}.xlsx`;
 
-async function* unsupportedDeliverable(taskType: string): AsyncGenerator<DeliverableEvent, void> {
-  const label = UNSUPPORTED_LABELS[taskType] ?? taskType;
+  // Workbook contents summary — what the user can expect inside the file.
+  const tabsList = `<ul class="memo-bullets">
+    <li><strong>Inputs</strong> — every input with origin (sourced / user / default) and source as a cell comment</li>
+    <li><strong>Model</strong> — ${rawTask === 'lbo' ? 'year-by-year debt schedule (revenue, EBITDA, capex, FCF, interest, principal, debt balance)' : 'projection table (revenue, EBIT, taxed EBIT, capex, FCF, discount factor, PV(FCF))'}</li>
+    <li><strong>Outputs</strong> — ${rawTask === 'lbo' ? 'sources &amp; uses, exit math, IRR, MOIC' : 'sum of PV(FCF), terminal value, enterprise value, EV/Revenue + EV/EBIT crosschecks'}</li>
+    <li><strong>Sensitivity</strong> — ${rawTask === 'lbo' ? 'Exit multiple × Revenue CAGR → IRR grid' : 'WACC × terminal growth → EV grid'}</li>
+    <li><strong>Sources</strong> — full citation list</li>
+  </ul>`;
+
   yield {
     type: 'token',
-    text: `<div class="memo-rec-banner" style="border-left-color:#fbbf24">
-      <div class="memo-rec-label" style="color:#fbbf24">DELIVERABLE NOT YET WIRED</div>
-      <div class="memo-rec-headline">${label}</div>
+    text: `<div class="memo-rec-banner">
+      <div class="memo-rec-label">EXCEL EXPORT READY</div>
+      <div class="memo-rec-headline">${targetLabel} · ${rawTask.toUpperCase()} · static-value workbook</div>
     </div>
-    <p>Compass recognized this request as a ${label.toLowerCase()}, but the pipeline isn't built yet. Try LBO, DCF, trading comps, precedents, IPO valuation, bond pricing, IC memo, or pitch book.</p>
-    <p class="memo-disclaimer">No fallback model will run — Compass refuses to fabricate results for a deliverable type it hasn't been implemented to handle.</p>`,
+    <p>Click the button below to download <code>${filename}</code>. The workbook contains:</p>
+    ${tabsList}
+    <p><button class="excel-export-btn" data-payload="${dataUri}" data-filename="${filename}">↓ Download .xlsx</button></p>
+    <p class="memo-disclaimer">Static values only — no live formulas in cells. Re-running the underlying model with new inputs requires a fresh export.</p>`,
+  };
+
+  yield {
+    type: 'inputs_traced',
+    inputs: [
+      { field: 'export_format', label: 'Export format', value: 'Static-value .xlsx (SheetJS)', origin: 'default', sourceRef: 'Compass Excel exporter' },
+      { field: 'source_model', label: 'Source model', value: rawTask.toUpperCase(), origin: 'sourced', sourceRef: 'Prior run in this conversation', citationN: 1 },
+      { field: 'target', label: 'Target', value: targetLabel, origin: 'sourced', sourceRef: prior.detected_target?.ticker ? `SEC ticker ${prior.detected_target.ticker}` : 'Curated entity', citationN: 1 },
+      { field: 'tabs', label: 'Workbook tabs', value: 'Inputs / Model / Outputs / Sensitivity / Sources', origin: 'default', sourceRef: 'Static layout' },
+    ],
+  };
+  yield {
+    type: 'sources',
+    sources: [{
+      n: 1,
+      title: `${targetLabel} prior ${rawTask.toUpperCase()} run`,
+      url: null,
+      meta: 'Base inputs and computed outputs are sourced from the conversation\'s prior model run',
+    }],
   };
   yield { type: 'done' };
 }

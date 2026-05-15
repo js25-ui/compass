@@ -74,7 +74,7 @@ Mapping cheat sheet:
 - "football field" → football_field
 - "IC memo", "investment memo", "approval memo" → ic_memo
 - "pitch book", "pitch deck", "deck" → pitch_book
-- "Excel model", "spreadsheet" → excel_model
+- "Excel model", "spreadsheet", "export to excel", "download as xlsx" → excel_model
 - Open-ended questions / explanations → chat_answer
 
 Be specific in detected_target. For "compare Apple to Microsoft", target_name = "Apple" (primary).

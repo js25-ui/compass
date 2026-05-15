@@ -129,21 +129,27 @@ export async function* runDCFPipeline(opts: {
     step: `Projecting ${projectionYears}y · WACC ${waccPct.toFixed(2)}% · g ${terminalGrowthPct.toFixed(2)}% · tax ${taxRatePct.toFixed(0)}%`,
   };
 
+  const dcfInputs: DCFInputs = {
+    baseRevenue,
+    baseEbit,
+    baseEbitMargin,
+    baseCapexPctRevenue,
+    historicalCagr,
+    projectionYears,
+    waccPct,
+    terminalGrowthPct,
+    taxRatePct,
+    terminalMethod,
+    exitMultiple,
+  };
+  // Emit inputs_resolved so the chat route can buffer these and re-emit
+  // deliverable_context with _model_* keys — letting Monte Carlo / Excel
+  // overlays carry forward exactly what this DCF ran on.
+  yield { type: 'inputs_resolved', inputs: dcfInputs as unknown as Record<string, unknown> };
+
   let pureResult: DCFResult;
   try {
-    pureResult = runDCF({
-      baseRevenue,
-      baseEbit,
-      baseEbitMargin,
-      baseCapexPctRevenue,
-      historicalCagr,
-      projectionYears,
-      waccPct,
-      terminalGrowthPct,
-      taxRatePct,
-      terminalMethod,
-      exitMultiple,
-    });
+    pureResult = runDCF(dcfInputs);
   } catch (err) {
     if (err instanceof DCFComputeError && err.field === 'terminal_growth_rate') {
       yield {

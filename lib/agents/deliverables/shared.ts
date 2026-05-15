@@ -133,11 +133,14 @@ export interface CalcStep {
 
 /** Generic deliverable event shape. */
 export interface DeliverableEvent {
-  type: 'progress' | 'token' | 'sources' | 'inputs_traced' | 'calc_steps' | 'done' | 'error';
+  type: 'progress' | 'token' | 'sources' | 'inputs_traced' | 'inputs_resolved' | 'calc_steps' | 'done' | 'error';
   step?: string;
   text?: string;
   sources?: Array<{ n: number; title: string; url: string | null; meta: string }>;
-  inputs?: InputTrace[];
+  /** For inputs_traced this is an array of InputTrace; for inputs_resolved it's
+   *  the underlying pure model's input object (used to thread base scalars
+   *  through prior_context for Monte Carlo / Excel follow-ups). */
+  inputs?: InputTrace[] | Record<string, unknown>;
   calc?: CalcStep[];
   error?: string;
 }
