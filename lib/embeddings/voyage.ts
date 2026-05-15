@@ -65,7 +65,15 @@ async function embedBatch(
         body: JSON.stringify({ input: batch, model: MODEL, input_type: inputType }),
       });
       if (res.status === 429) {
-        await sleep((attempt + 1) * 2000);
+        // Voyage free tier: 3 RPM with a 60s window. Burning short
+        // backoffs (2s/4s/6s) inside that window is pointless. Sleep
+        // 22s then retry — clears one RPM slot. Only 1 retry to stay
+        // inside Vercel's ingest function ceiling.
+        if (attempt >= 1) {
+          lastDetail = '429 rate limited (Voyage free-tier RPM exhausted)';
+          break;
+        }
+        await sleep(22_000);
         attempt += 1;
         lastDetail = '429 rate limited';
         continue;

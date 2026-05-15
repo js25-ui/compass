@@ -4,6 +4,6 @@
   "framework": "nextjs",
   "regions": ["iad1"],
   "functions": {
-    "app/api/ingest/[entity]/route.ts": { "maxDuration": 60 }
+    "app/api/ingest/[entity]/route.ts": { "maxDuration": 90 }
   }
 }
