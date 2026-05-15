@@ -31,16 +31,25 @@ const DEFAULT_MAX_ARTICLES = 15;
 const MIN_CHUNK_CHARS = 200;
 // Per-doc cap. SEC filings are long but the section-priority sort below
 // keeps the most-valuable sections (income statement, MD&A, cash flow,
-// balance sheet) first, so 15 is enough to cover the financial-statement
+// balance sheet) first, so 8 is enough to cover the financial-statement
 // tables + MD&A commentary for the typical filing. News stays at 2.
-const MAX_CHUNKS_PER_FILING = 15;
+const MAX_CHUNKS_PER_FILING = 8;
 const MAX_CHUNKS_PER_NEWS = 2;
-// Total ceiling across all docs in one ingest. Tuned against Voyage's
-// free-tier 3-RPM rate limit: batches of 96 chunks each with a 21s
-// inter-batch wait means 100 chunks ≈ 1 batch + 1 retry buffer ≈ <30s
-// embedding wall-clock. Combined with EDGAR/news fetches (~15s) and
-// Supabase writes (~3s), the whole ingest fits in the 60s function cap.
-const MAX_TOTAL_CHUNKS = 100;
+// Total ceiling across all docs in one ingest. 60 fits in a single
+// Voyage batch (96 max) — the previous 100-chunk target was triggering
+// a second Voyage call that ran into 3-RPM rate limits. With this cap
+// we make one embedding request per ingest and stay well inside both
+// Voyage's TPM and Vercel's function deadline.
+const MAX_TOTAL_CHUNKS = 60;
+// Sections we skip embedding entirely — boilerplate that wastes Voyage
+// credits and crowds out high-value content for the section re-ranker.
+const SKIP_EMBED_SECTIONS = new Set([
+  'cover_page',
+  'forward_looking',
+  'table_of_contents',
+  'signatures',
+  'exhibits',
+]);
 
 // Section preference ordering. When we have more chunks for a doc than
 // MAX_CHUNKS_PER_FILING, keep the ones from the most valuable sections
@@ -231,10 +240,12 @@ export async function* ingestEntity(
       // section (income_statement, mdna, forward_looking, etc.).
       const allChunks = chunkText(doc.content_full!, { docType: doc.doc_type });
       const perDocCap = isSecFiling(doc.doc_type) ? MAX_CHUNKS_PER_FILING : MAX_CHUNKS_PER_NEWS;
-      // Order by section priority (income_statement / MD&A first, cover_page
-      // / forward_looking last), then preserve original position as a
-      // tie-breaker. Slicing to perDocCap keeps the highest-value sections.
-      const ordered = [...allChunks].sort((a, b) => {
+      // Drop boilerplate sections before any ranking — never worth
+      // spending Voyage credits on the cover page or table of contents.
+      const filtered = allChunks.filter(c => !SKIP_EMBED_SECTIONS.has(c.section ?? 'unknown'));
+      // Order by section priority (income_statement / MD&A first), then
+      // preserve original position as tie-breaker. Slice to perDocCap.
+      const ordered = [...filtered].sort((a, b) => {
         const ap = SECTION_PRIORITY[a.section ?? 'unknown'] ?? 35;
         const bp = SECTION_PRIORITY[b.section ?? 'unknown'] ?? 35;
         if (bp !== ap) return bp - ap;
