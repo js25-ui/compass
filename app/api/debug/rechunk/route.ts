@@ -35,9 +35,17 @@ export async function GET(request: NextRequest) {
   const html = await res.text();
   const text = stripHtml(html);
 
+  // Test splitSentences directly
+  const re = /[^.!?]+(?:[.!?]+(?=\s|$)|$)/g;
+  const matches: Array<{ index: number; len: number; preview: string }> = [];
+  let m: RegExpExecArray | null;
+  let count = 0;
+  while ((m = re.exec(text)) !== null && count < 5) {
+    matches.push({ index: m.index, len: m[0].length, preview: m[0].slice(0, 100) });
+    count++;
+  }
+
   const chunks = chunkText(text, { docType });
-  // What does the text actually start with? Verify chunkText's collapsed-text view
-  // matches what we just stripped.
   const collapsedFirst200 = text.slice(0, 200);
   const firstChunkContentFirst80 = chunks[0]?.content.slice(0, 80) ?? '(none)';
   const firstChunkContentPositionInText = text.indexOf(chunks[0]?.content.slice(0, 50) ?? '');
@@ -85,6 +93,7 @@ export async function GET(request: NextRequest) {
   return Response.json({
     textLength: text.length,
     collapsedFirst200,
+    rawSentenceMatches: matches,
     firstChunkContentFirst80,
     firstChunkContentPositionInText,
     totalChunks: chunks.length,
