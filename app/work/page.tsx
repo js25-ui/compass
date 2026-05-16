@@ -22,17 +22,41 @@ export interface WorkTrace {
 
 const STORAGE_KEY = 'compass:lastWorkTrace';
 
+// useSyncExternalStore's getSnapshot must return a stable reference when the
+// underlying data hasn't changed. Re-running JSON.parse on every render
+// returns a new object literal each call — React detects the ref churn and
+// throws "The result of getSnapshot should be cached", which surfaces in
+// production as a client-side exception. We cache by raw string so parses
+// only happen when localStorage actually changes.
+let cachedRaw: string | null = null;
+let cachedTrace: WorkTrace | null = null;
+
 function subscribeToTrace(callback: () => void): () => void {
   const handler = (e: StorageEvent) => { if (e.key === STORAGE_KEY) callback(); };
   window.addEventListener('storage', handler);
   return () => window.removeEventListener('storage', handler);
 }
 
+function isValidTrace(t: unknown): t is WorkTrace {
+  if (!t || typeof t !== 'object') return false;
+  const obj = t as Record<string, unknown>;
+  // Old/partial traces from a prior schema would be missing one of these
+  // arrays and crash the render. Guard so we ignore them.
+  return Array.isArray(obj.activity) && Array.isArray(obj.sources);
+}
+
 function readTrace(): WorkTrace | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as WorkTrace) : null;
+    const raw = typeof window === 'undefined' ? null : localStorage.getItem(STORAGE_KEY);
+    if (raw === cachedRaw) return cachedTrace;
+    cachedRaw = raw;
+    if (!raw) { cachedTrace = null; return null; }
+    const parsed = JSON.parse(raw);
+    cachedTrace = isValidTrace(parsed) ? parsed : null;
+    return cachedTrace;
   } catch {
+    cachedRaw = null;
+    cachedTrace = null;
     return null;
   }
 }
