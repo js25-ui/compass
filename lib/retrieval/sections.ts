@@ -275,40 +275,32 @@ export function tagChunksBySection(
   // sit inside this region — those are ToC navigation entries pointing at
   // pages, not the actual sections themselves.
   const tocMarker = markers.find(m => m.tag === 'table_of_contents');
+  const tocEnd = tocMarker ? tocMarker.start + 15_000 : 0;
   if (tocMarker) {
     // The ToC block in a 10-Q/10-K is typically ~10-15K chars long: it
     // lists item titles + page numbers, plus forward-looking-statement
     // boilerplate and risk-factor summaries. Real Item headings inside
     // this block are PAGE-NUMBER REFERENCES, not the actual section
-    // starts — they need to be filtered out.
-    //
-    // Use a conservative 15K-char buffer past the ToC marker. The actual
-    // financial-statement tables are at char 80K+ on a typical Snowflake-
-    // sized 10-Q, so we won't accidentally filter real content. Anything
-    // sitting at char 40K-55K that calls itself 'ITEM 2.' is a ToC entry.
-    const tocEnd = tocMarker.start + 15_000;
+    // starts. Use a conservative 15K-char buffer past the ToC marker.
     markers = markers.filter(m =>
       m.start <= tocMarker.start || m.start >= tocEnd || m.tag === 'table_of_contents',
     );
   }
 
-  // Content-based detection of the actual income-statement table. The
-  // table appears after the ToC and is identifiable by 'Product revenue $'
-  // or 'Total revenue $' followed by dollar amounts — a pattern that
-  // doesn't appear in ToC entries or notes prose.
-  const incomeStatementMarkers = findIncomeStatementTables(text, tocMarker?.start ?? 0);
+  // Content-based detection — skip anything inside the ToC buffer
+  // (passing tocEnd, not tocMarker.start, so matches IN the ToC region
+  // like accounting-policies mentions of 'Product revenue $X' don't
+  // become section starts).
+  const skipUntil = Math.max(tocEnd, 1500);
+  const incomeStatementMarkers = findIncomeStatementTables(text, skipUntil);
   for (const pos of incomeStatementMarkers) {
     markers.push({ start: pos, tag: 'income_statement', priority: 15 });
   }
-  // Cash flow tables — 'Cash flows from operating activities' followed
-  // by dollar columns.
-  const cashFlowMarkers = findCashFlowTables(text, tocMarker?.start ?? 0);
+  const cashFlowMarkers = findCashFlowTables(text, skipUntil);
   for (const pos of cashFlowMarkers) {
     markers.push({ start: pos, tag: 'cash_flow', priority: 15 });
   }
-  // Balance sheet — 'Total assets $' or 'Total liabilities $' followed by
-  // dollar amounts identifies the balance sheet table.
-  const balanceSheetMarkers = findBalanceSheetTables(text, tocMarker?.start ?? 0);
+  const balanceSheetMarkers = findBalanceSheetTables(text, skipUntil);
   for (const pos of balanceSheetMarkers) {
     markers.push({ start: pos, tag: 'balance_sheet', priority: 15 });
   }
