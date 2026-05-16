@@ -235,7 +235,27 @@ export async function* ingestEntity(
     const texts: string[] = [];
     const meta: Array<{ docId: string; index: number; section: string | null }> = [];
 
-    outer: for (const doc of chunkableDocs) {
+    // Doc processing order matters because of MAX_TOTAL_CHUNKS — once we
+    // hit the cap, later docs get zero chunks. For analyst research the
+    // most recent 10-Q is more useful for quarterly questions than the
+    // 10-K (annual coverage) or 8-Ks (event-specific), so we sort 10-Qs
+    // first, then 10-Ks, then everything else by filed date.
+    const docPriority = (doc: PendingDocument): number => {
+      const dt = (doc.doc_type ?? '').toUpperCase();
+      if (dt.startsWith('10-Q')) return 100;
+      if (dt.startsWith('10-K')) return 90;
+      if (dt.startsWith('20-F') || dt.startsWith('40-F')) return 85;
+      if (dt.startsWith('8-K')) return 70;
+      return 50;
+    };
+    const sortedDocs = [...chunkableDocs].sort((a, b) => {
+      const dp = docPriority(b) - docPriority(a);
+      if (dp !== 0) return dp;
+      const at = a.filed_at ?? '';
+      const bt = b.filed_at ?? '';
+      return at < bt ? 1 : at > bt ? -1 : 0;
+    });
+    outer: for (const doc of sortedDocs) {
       // Pass doc_type so the chunker can tag each chunk with its SEC
       // section (income_statement, mdna, forward_looking, etc.).
       const allChunks = chunkText(doc.content_full!, { docType: doc.doc_type });
