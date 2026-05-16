@@ -276,16 +276,19 @@ export function tagChunksBySection(
   // pages, not the actual sections themselves.
   const tocMarker = markers.find(m => m.tag === 'table_of_contents');
   if (tocMarker) {
-    // The first ITEM 2 / mdna / market_risk / risk_factors marker AFTER
-    // the ToC is the start of real content. (Item 1 'Financial Statements'
-    // is too generic and not in our pattern list.) For 10-Q, MDNA is
-    // typically the first real Item heading after the financial statements.
-    const realStart = markers
-      .filter(m => m.start > tocMarker.start && /^(mdna|market_risk|risk_factors|controls_procedures|legal_proceedings)$/.test(m.tag))
-      .map(m => m.start)
-      .sort((a, b) => a - b)[0] ?? (tocMarker.start + 5000);
+    // The ToC block in a 10-Q/10-K is typically ~10-15K chars long: it
+    // lists item titles + page numbers, plus forward-looking-statement
+    // boilerplate and risk-factor summaries. Real Item headings inside
+    // this block are PAGE-NUMBER REFERENCES, not the actual section
+    // starts — they need to be filtered out.
+    //
+    // Use a conservative 15K-char buffer past the ToC marker. The actual
+    // financial-statement tables are at char 80K+ on a typical Snowflake-
+    // sized 10-Q, so we won't accidentally filter real content. Anything
+    // sitting at char 40K-55K that calls itself 'ITEM 2.' is a ToC entry.
+    const tocEnd = tocMarker.start + 15_000;
     markers = markers.filter(m =>
-      m.start <= tocMarker.start || m.start >= realStart || m.tag === 'table_of_contents',
+      m.start <= tocMarker.start || m.start >= tocEnd || m.tag === 'table_of_contents',
     );
   }
 
