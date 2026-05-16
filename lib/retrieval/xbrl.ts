@@ -17,6 +17,7 @@ export interface XbrlFact {
   val: number;
   fy: number;                 // fiscal year
   fp: string;                 // 'FY' | 'Q1' | 'Q2' | 'Q3' | 'Q4'
+  start?: string;             // ISO date — duration facts only (income statement, cash flow)
   end: string;                // ISO date "2010-09-25"
   filed: string;              // ISO date filing was submitted
   form: string;               // '10-K' | '10-Q' | etc.
