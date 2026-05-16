@@ -29,18 +29,18 @@ import type { IngestEvent, IngestOptions, SourceName } from './types';
 const DEFAULT_MAX_FILINGS = 10;
 const DEFAULT_MAX_ARTICLES = 15;
 const MIN_CHUNK_CHARS = 200;
-// Per-doc cap. SEC filings are long but the section-priority sort below
-// keeps the most-valuable sections (income statement, MD&A, cash flow,
-// balance sheet) first, so 8 is enough to cover the financial-statement
-// tables + MD&A commentary for the typical filing. News stays at 2.
-const MAX_CHUNKS_PER_FILING = 8;
+// Per-doc cap. SEC filings get up to 6 chunks each (income statement,
+// MD&A, cash flow, balance sheet, notes, market_risk via section sort).
+// News gets 2. The section-priority sort means the 6 we keep per filing
+// are the high-value sections; boilerplate is dropped before this even
+// applies via SKIP_EMBED_SECTIONS below.
+const MAX_CHUNKS_PER_FILING = 6;
 const MAX_CHUNKS_PER_NEWS = 2;
-// Total ceiling across all docs in one ingest. 60 fits in a single
-// Voyage batch (96 max) — the previous 100-chunk target was triggering
-// a second Voyage call that ran into 3-RPM rate limits. With this cap
-// we make one embedding request per ingest and stay well inside both
-// Voyage's TPM and Vercel's function deadline.
-const MAX_TOTAL_CHUNKS = 60;
+// Total ceiling. Tuned against Voyage's free-tier no-payment-method
+// limits — 10K TPM, 3 RPM. A ~12-chunk batch at ~500 tokens each is
+// ~6K tokens, comfortably under TPM. Larger batches hit 429 and the
+// whole ingest fails.
+const MAX_TOTAL_CHUNKS = 12;
 // Sections we skip embedding entirely — boilerplate that wastes Voyage
 // credits and crowds out high-value content for the section re-ranker.
 const SKIP_EMBED_SECTIONS = new Set([
