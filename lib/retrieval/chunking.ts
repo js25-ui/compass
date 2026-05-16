@@ -43,24 +43,31 @@ export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
     return [{ index: 0, content: text, charStart: 0, charEnd: text.length }];
   }
 
-  // When a "sentence" has no period (inline-XBRL filings have a 200KB+ run
-  // of XBRL metadata with no sentence terminators), forceSplit windows it
-  // into targetChars-sized pieces so we end up with properly-sized chunks
-  // (~2KB each) instead of one 200KB mega-chunk.
-  const sentences = splitSentences(text).flatMap(s => forceSplit(s, targetChars));
+  // Capture each sentence WITH its position in the original collapsed text.
+  // Inline-XBRL filings start with a 30-100KB run of XBRL metadata that has
+  // no '. ' boundaries — the sentence regex skips it entirely. Tracking
+  // m.index keeps chunk charStart values aligned to the original text so
+  // section detection (which uses position offsets to find ITEM headings)
+  // tags the right chunks. Force-splitting handles the giant first
+  // sentence so each chunk stays ~targetChars wide.
+  const rawSentences = splitSentencesWithIndex(text);
+  const positionedSentences: Array<{ text: string; index: number }> = [];
+  for (const s of rawSentences) {
+    const pieces = forceSplit(s.text, targetChars);
+    let offset = 0;
+    for (const piece of pieces) {
+      positionedSentences.push({ text: piece, index: s.index + offset });
+      offset += piece.length;
+    }
+  }
+
   const chunks: Chunk[] = [];
   let buffer = '';
-  let bufferStart = 0;
-  let cursor = 0;
+  let bufferStart = -1;
 
-  for (const sentence of sentences) {
-    const sentenceLen = sentence.length;
+  for (const sent of positionedSentences) {
+    const sentenceLen = sent.text.length;
     if (buffer.length + sentenceLen + 1 > targetChars && buffer.length > 0) {
-      // Capture buffer length BEFORE reassigning buffer to overlap —
-      // otherwise the advance math below uses the post-reassign length
-      // (== overlap.length) and bufferStart never advances past 0,
-      // breaking every position-based downstream consumer (section
-      // tagger, citation locator, etc.).
       const flushedLen = buffer.length;
       chunks.push({
         index: chunks.length,
@@ -70,13 +77,15 @@ export function chunkText(input: string, opts: ChunkOptions = {}): Chunk[] {
       });
       const overlap = buffer.slice(Math.max(0, flushedLen - overlapChars));
       buffer = overlap;
-      bufferStart = bufferStart + (flushedLen - overlap.length);
+      // The new buffer (overlap) represents the last overlapChars of the
+      // flushed chunk — its starting position is the previous chunk's
+      // end minus the overlap length.
+      bufferStart = bufferStart + flushedLen - overlap.length;
     }
     if (buffer.length === 0) {
-      bufferStart = cursor;
+      bufferStart = sent.index;
     }
-    buffer = buffer ? `${buffer} ${sentence}` : sentence;
-    cursor += sentenceLen + 1;
+    buffer = buffer ? `${buffer} ${sent.text}` : sent.text;
   }
 
   if (buffer.trim().length > 0) {
@@ -109,13 +118,22 @@ function forceSplit(sentence: string, windowChars: number): string[] {
   return out;
 }
 
-function splitSentences(text: string): string[] {
-  const out: string[] = [];
+function splitSentencesWithIndex(text: string): Array<{ text: string; index: number }> {
+  const out: Array<{ text: string; index: number }> = [];
   const re = /[^.!?]+(?:[.!?]+(?=\s|$)|$)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const s = m[0].trim();
-    if (s) out.push(s);
+    // Capture position BEFORE trim — trim only adjusts leading/trailing
+    // whitespace, which is rare here since text is already collapsed.
+    const matched = m[0];
+    const trimmed = matched.trim();
+    if (trimmed) {
+      // Adjust index forward if trim removed leading whitespace.
+      const leadingWs = matched.length - matched.trimStart().length;
+      out.push({ text: trimmed, index: m.index + leadingWs });
+    }
   }
-  return out.length > 0 ? out : [text];
+  // If the regex returned ZERO matches, the whole text becomes one sentence
+  // starting at index 0 (extreme edge case — periodless text).
+  return out.length > 0 ? out : [{ text, index: 0 }];
 }
