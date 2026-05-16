@@ -407,12 +407,18 @@ function dcfInputsFromScope(scope: Record<string, unknown>): DCFInputs | null {
       ? 'exit_multiple' : 'gordon_growth'
   ) as 'gordon_growth' | 'exit_multiple';
   const exitMultiple = num(scope._model_exitMultiple) ?? num(scope.exit_multiple);
+  const baseDaPctRevenue = num(scope._model_baseDaPctRevenue) ?? num(scope.da_pct_revenue) ?? 0.025;
+  const nwcPctIncrementalRevenue = num(scope._model_nwcPctIncrementalRevenue) ?? num(scope.nwc_pct_revenue) ?? 0;
+  const projectedRevenueCagr = num(scope._model_projectedRevenueCagr) ?? num(scope.revenue_cagr) ?? undefined;
   return {
     baseRevenue,
     baseEbit,
     baseEbitMargin,
     baseCapexPctRevenue,
+    baseDaPctRevenue,
+    nwcPctIncrementalRevenue,
     historicalCagr,
+    projectedRevenueCagr,
     projectionYears: Math.round(projectionYears),
     waccPct,
     terminalGrowthPct,

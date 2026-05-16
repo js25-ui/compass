@@ -1,9 +1,8 @@
 /**
  * Pure DCF calculator. Inputs in, outputs out, no IO, no streaming, no UI.
  *
- * Math is intentionally simple — sponsor-grade quick valuation, not a
- * fully-detailed three-statement build:
- *   FCF_t  = EBIT_t × (1 − tax) − capex_t
+ * Unlevered FCF bridge:
+ *   FCF_t  = EBIT_t × (1 − tax) + D&A_t − Capex_t − ΔNWC_t
  *   EV     = Σ FCF_t / (1+WACC)^t  +  TV / (1+WACC)^N
  *   TV (Gordon) = FCF_N × (1+g) / (WACC − g)
  *   TV (Exit)   = EBIT_N × exit_multiple
@@ -17,9 +16,17 @@
 export interface DCFInputs {
   baseRevenue: number;            // $M
   baseEbit: number;               // $M
-  baseEbitMargin: number;         // decimal, derived but explicit for transparency
+  baseEbitMargin: number;         // decimal — applied to projected revenue each year
   baseCapexPctRevenue: number;    // decimal, e.g. 0.04
+  baseDaPctRevenue: number;       // decimal, e.g. 0.025 (D&A / revenue)
+  /** ΔNWC as a fraction of incremental revenue (not of total revenue).
+   *  e.g. 0.01 means new NWC equal to 1% of each year's revenue increase. */
+  nwcPctIncrementalRevenue: number;
   historicalCagr: number;         // decimal
+  /** When set, projects revenue at this flat CAGR (overrides decayed-growth
+   *  path off historical). Set by the pipeline when the user supplies
+   *  revenue_cagr in scope. */
+  projectedRevenueCagr?: number;
   projectionYears: number;        // integer
   waccPct: number;                // pct (9.0 = 9%)
   terminalGrowthPct: number;      // pct
@@ -34,7 +41,9 @@ export interface ProjectionRow {
   revenue: number;
   ebit: number;
   taxedEbit: number;
+  da: number;
   capex: number;
+  deltaNwc: number;
   fcf: number;
   discountFactor: number;
   pvFcf: number;
@@ -46,8 +55,13 @@ export interface DCFResult {
     terminalGrowthPct: number;
     taxRatePct: number;
     capexPctRevenue: number;
+    daPctRevenue: number;
+    nwcPctIncrementalRevenue: number;
     ebitMarginPct: number;
     historicalRevenueCagrPct: number;
+    /** If the pipeline set projectedRevenueCagr, this is the flat forward
+     *  CAGR used. Null when growth was decayed from historical. */
+    projectedRevenueCagrPct: number | null;
     projectionYears: number;
     terminalMethod: 'gordon_growth' | 'exit_multiple';
     exitMultiple: number | null;
@@ -89,16 +103,26 @@ export function runDCF(inp: DCFInputs): DCFResult {
   }
 
   const decayFrac = inp.growthDecayFrac ?? DEFAULT_GROWTH_DECAY_FRAC;
+  const useFlatCagr = inp.projectedRevenueCagr != null;
   const projections: ProjectionRow[] = [];
-  let currentRevenue = inp.baseRevenue;
-  let currentGrowth = inp.historicalCagr;
+  let priorRevenue = inp.baseRevenue;
+  let currentGrowth = useFlatCagr ? inp.projectedRevenueCagr! : inp.historicalCagr;
   for (let t = 1; t <= inp.projectionYears; t++) {
-    currentGrowth = currentGrowth - (currentGrowth - g) * decayFrac;
-    currentRevenue = currentRevenue * (1 + currentGrowth);
+    if (!useFlatCagr) {
+      // Decay historical growth toward terminal g each year.
+      currentGrowth = currentGrowth - (currentGrowth - g) * decayFrac;
+    }
+    const currentRevenue = priorRevenue * (1 + currentGrowth);
     const ebit = currentRevenue * inp.baseEbitMargin;
     const taxedEbit = ebit * (1 - taxRate);
+    const da = currentRevenue * inp.baseDaPctRevenue;
     const capexProj = currentRevenue * inp.baseCapexPctRevenue;
-    const fcf = taxedEbit - capexProj;
+    // ΔNWC = nwcPctIncrementalRevenue × (revenue_t − revenue_{t-1}).
+    // Negative incremental revenue (rare in projections) releases working
+    // capital — keeps the sign consistent so we don't fabricate positive
+    // FCF from declining sales.
+    const deltaNwc = inp.nwcPctIncrementalRevenue * (currentRevenue - priorRevenue);
+    const fcf = taxedEbit + da - capexProj - deltaNwc;
     const discountFactor = Math.pow(1 + wacc, t);
     const pvFcf = fcf / discountFactor;
     projections.push({
@@ -106,11 +130,14 @@ export function runDCF(inp: DCFInputs): DCFResult {
       revenue: currentRevenue,
       ebit,
       taxedEbit,
+      da,
       capex: capexProj,
+      deltaNwc,
       fcf,
       discountFactor,
       pvFcf,
     });
+    priorRevenue = currentRevenue;
   }
 
   const last = projections[projections.length - 1];
@@ -152,8 +179,11 @@ export function runDCF(inp: DCFInputs): DCFResult {
       terminalGrowthPct: inp.terminalGrowthPct,
       taxRatePct: inp.taxRatePct,
       capexPctRevenue: inp.baseCapexPctRevenue * 100,
+      daPctRevenue: inp.baseDaPctRevenue * 100,
+      nwcPctIncrementalRevenue: inp.nwcPctIncrementalRevenue * 100,
       ebitMarginPct: inp.baseEbitMargin * 100,
       historicalRevenueCagrPct: inp.historicalCagr * 100,
+      projectedRevenueCagrPct: inp.projectedRevenueCagr != null ? inp.projectedRevenueCagr * 100 : null,
       projectionYears: inp.projectionYears,
       terminalMethod: inp.terminalMethod,
       exitMultiple: inp.exitMultiple,

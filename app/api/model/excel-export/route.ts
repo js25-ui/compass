@@ -222,7 +222,7 @@ function buildDCFWorkbook(
   XLSX.utils.book_append_sheet(wb, inputsSheet, 'Inputs');
 
   // Projection rows
-  const modelHeader = ['Year', 'Revenue ($M)', 'EBIT ($M)', 'Taxed EBIT ($M)', 'Capex ($M)', 'FCF ($M)', 'Discount factor', 'PV(FCF) ($M)'];
+  const modelHeader = ['Year', 'Revenue ($M)', 'EBIT ($M)', 'Taxed EBIT ($M)', 'D&A ($M)', 'Capex ($M)', 'ΔNWC ($M)', 'FCF ($M)', 'Discount factor', 'PV(FCF) ($M)'];
   const modelRows: Array<Array<string | number>> = [modelHeader];
   for (const p of result.projections) {
     modelRows.push([
@@ -230,7 +230,9 @@ function buildDCFWorkbook(
       round2(p.revenue),
       round2(p.ebit),
       round2(p.taxedEbit),
+      round2(p.da),
       round2(p.capex),
+      round2(p.deltaNwc),
       round2(p.fcf),
       round4(p.discountFactor),
       round2(p.pvFcf),
@@ -311,7 +313,10 @@ function dcfInputsFrom(scope: Record<string, unknown>): DCFInputs | null {
     baseEbit,
     baseEbitMargin,
     baseCapexPctRevenue: num(scope._model_baseCapexPctRevenue) ?? 0.04,
+    baseDaPctRevenue: num(scope._model_baseDaPctRevenue) ?? 0.025,
+    nwcPctIncrementalRevenue: num(scope._model_nwcPctIncrementalRevenue) ?? 0,
     historicalCagr: num(scope._model_historicalCagr) ?? 0.05,
+    projectedRevenueCagr: num(scope._model_projectedRevenueCagr) ?? undefined,
     projectionYears: Math.round(num(scope._model_projectionYears) ?? 5),
     waccPct: num(scope._model_waccPct) ?? 9,
     terminalGrowthPct: num(scope._model_terminalGrowthPct) ?? 2.5,

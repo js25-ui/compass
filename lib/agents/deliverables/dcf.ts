@@ -30,6 +30,7 @@ import { preflight } from '@/lib/data/preflight';
 import { DCF_MANIFEST as DCF_DATA_MANIFEST } from '@/lib/models/manifests';
 import { pickAnnualHistory } from '@/lib/data/financial_facts';
 import { runDCF, DCFComputeError, type DCFInputs, type DCFResult } from '@/lib/models/dcf';
+import { getLtmFinancials } from '@/lib/retrieval/xbrl_ltm';
 
 export interface DCFScope {
   projection_years?: string | number;
@@ -39,6 +40,11 @@ export interface DCFScope {
   terminal_method?: 'gordon_growth' | 'exit_multiple';
   exit_multiple?: number;        // x EBITDA — used when terminal_method = exit_multiple
   tax_rate?: number;             // %
+  /** User-supplied projection drivers — override historical-derived defaults. */
+  revenue_cagr?: number;         // % flat CAGR
+  ebit_margin?: number;          // % held flat across forecast
+  capex_pct_revenue?: number;    // %
+  nwc_pct_revenue?: number;      // % of incremental revenue
   [k: string]: unknown;
 }
 
@@ -95,13 +101,23 @@ export async function* runDCFPipeline(opts: {
     step: `Pulled ${revenue.length}y revenue · ${oi.length}y EBIT${capex.length > 0 ? ` · ${capex.length}y capex` : ''}`,
   };
 
-  // Base-year scalars (latest fiscal year).
+  // Base-year scalars (latest fiscal year) — historical anchors. Each can
+  // be overridden by a user-supplied scope value below.
   const baseRevenue = revenue[0].value!;
   const baseEbit = oi[0].value!;
-  const baseEbitMargin = baseEbit / baseRevenue;
-  const baseCapexPctRevenue = capex.length > 0 && capex[0].value != null
+  const histEbitMargin = baseEbit / baseRevenue;
+  const histCapexPctRevenue = capex.length > 0 && capex[0].value != null
     ? capex[0].value / baseRevenue
-    : 0.04;  // 4% of revenue is a reasonable cross-sector default
+    : 0.04;
+
+  // Pull D&A from XBRL (DepreciationDepletionAndAmortization concept).
+  // financial_facts doesn't cache D&A yet, so fetch direct from
+  // companyfacts via the LTM helper — its FY-when-fresh logic returns
+  // the same fiscal year as the revenue/EBIT we just used.
+  const ltm = pre.entity.cik ? await getLtmFinancials(pre.entity.cik).catch(() => null) : null;
+  const histDaPctRevenue = ltm?.ltmDepreciationAmortization != null && ltm.ltmRevenue && ltm.ltmRevenue > 0
+    ? ltm.ltmDepreciationAmortization / ltm.ltmRevenue
+    : 0.025;  // 2.5% is a reasonable cross-sector software/large-cap default
 
   // Historical CAGR — oldest annual to latest annual.
   const oldestRevenue = revenue[revenue.length - 1].value!;
@@ -123,9 +139,16 @@ export async function* runDCFPipeline(opts: {
   const terminalMethod = (opts.scope.terminal_method ?? 'gordon_growth') as 'gordon_growth' | 'exit_multiple';
   const exitMultiple = opts.scope.exit_multiple != null ? Number(opts.scope.exit_multiple) : null;
 
+  // User-supplied projection drivers (% inputs). When set, override historical.
+  const projectedRevenueCagr = opts.scope.revenue_cagr != null ? Number(opts.scope.revenue_cagr) / 100 : undefined;
+  const baseEbitMargin = opts.scope.ebit_margin != null ? Number(opts.scope.ebit_margin) / 100 : histEbitMargin;
+  const baseCapexPctRevenue = opts.scope.capex_pct_revenue != null ? Number(opts.scope.capex_pct_revenue) / 100 : histCapexPctRevenue;
+  const nwcPctIncrementalRevenue = opts.scope.nwc_pct_revenue != null ? Number(opts.scope.nwc_pct_revenue) / 100 : 0;
+  const baseDaPctRevenue = histDaPctRevenue;
+
   yield {
     type: 'progress',
-    step: `Projecting ${projectionYears}y · WACC ${waccPct.toFixed(2)}% · g ${terminalGrowthPct.toFixed(2)}% · tax ${taxRatePct.toFixed(0)}%`,
+    step: `Projecting ${projectionYears}y · ${projectedRevenueCagr != null ? `${(projectedRevenueCagr*100).toFixed(1)}% rev CAGR (user)` : `historical CAGR ${(historicalCagr*100).toFixed(1)}%`} · ${(baseEbitMargin*100).toFixed(1)}% EBIT mgn · WACC ${waccPct.toFixed(2)}% · g ${terminalGrowthPct.toFixed(2)}%`,
   };
 
   const dcfInputs: DCFInputs = {
@@ -133,7 +156,10 @@ export async function* runDCFPipeline(opts: {
     baseEbit,
     baseEbitMargin,
     baseCapexPctRevenue,
+    baseDaPctRevenue,
+    nwcPctIncrementalRevenue,
     historicalCagr,
+    projectedRevenueCagr,
     projectionYears,
     waccPct,
     terminalGrowthPct,
@@ -190,13 +216,54 @@ export async function* runDCFPipeline(opts: {
 
   const xbrlRef = `SEC EDGAR · XBRL · ${revenue[0].period}`;
   const userSpec = (k: keyof DCFScope) => opts.scope[k] != null;
+  const fromPrompt = (k: keyof DCFScope) => userSpec(k) ? 'from your prompt' : null;
   const inputs: InputTrace[] = [
     { field: 'target', label: 'Target entity', value: `${pre.entity.name}${pre.entity.ticker ? ` (${pre.entity.ticker})` : ''}`, origin: 'sourced', sourceRef: pre.entity.cik ? `SEC EDGAR · CIK ${pre.entity.cik}` : 'Curated entity', citationN: 1 },
     { field: 'base_revenue', label: 'Base-year revenue', value: fmtMillions(baseRevenue), origin: 'sourced', sourceRef: xbrlRef, citationN: 1 },
     { field: 'base_ebit', label: 'Base-year EBIT', value: fmtMillions(baseEbit), origin: 'sourced', sourceRef: xbrlRef, citationN: 1 },
-    { field: 'base_ebit_margin', label: 'Base EBIT margin', value: `${(baseEbitMargin * 100).toFixed(1)}%`, origin: 'sourced', sourceRef: `Derived (EBIT ÷ revenue) · ${xbrlRef}`, citationN: 1 },
-    { field: 'base_capex_pct', label: 'Base capex % revenue', value: `${(baseCapexPctRevenue * 100).toFixed(2)}%`, origin: capex.length > 0 ? 'sourced' : 'default', sourceRef: capex.length > 0 ? `Derived · ${xbrlRef}` : 'Default 4% (no capex tag in filings)', citationN: capex.length > 0 ? 1 : undefined },
-    { field: 'historical_cagr', label: 'Historical revenue CAGR', value: `${(historicalCagr * 100).toFixed(1)}%`, origin: 'sourced', sourceRef: `Derived from ${revenue.length}y revenue series · ${xbrlRef}`, citationN: 1 },
+    {
+      field: 'revenue_cagr',
+      label: 'Projected revenue CAGR',
+      value: projectedRevenueCagr != null ? `${(projectedRevenueCagr * 100).toFixed(2)}%` : `${(historicalCagr * 100).toFixed(2)}% (decayed to g)`,
+      origin: userSpec('revenue_cagr') ? 'user_assumption' : 'sourced',
+      sourceRef: fromPrompt('revenue_cagr') ?? `Historical ${revenue.length}y · ${xbrlRef}`,
+      citationN: userSpec('revenue_cagr') ? undefined : 1,
+    },
+    {
+      field: 'ebit_margin',
+      label: 'EBIT margin (flat across forecast)',
+      value: `${(baseEbitMargin * 100).toFixed(2)}%`,
+      origin: userSpec('ebit_margin') ? 'user_assumption' : 'sourced',
+      sourceRef: fromPrompt('ebit_margin') ?? `Derived (EBIT ÷ revenue) · ${xbrlRef}`,
+      citationN: userSpec('ebit_margin') ? undefined : 1,
+    },
+    {
+      field: 'capex_pct_revenue',
+      label: 'Capex / revenue',
+      value: `${(baseCapexPctRevenue * 100).toFixed(2)}%`,
+      origin: userSpec('capex_pct_revenue') ? 'user_assumption' : (capex.length > 0 ? 'sourced' : 'default'),
+      sourceRef: fromPrompt('capex_pct_revenue')
+        ?? (capex.length > 0 ? `Derived · ${xbrlRef}` : 'Default 4% (no capex tag in filings)'),
+      citationN: userSpec('capex_pct_revenue') ? undefined : (capex.length > 0 ? 1 : undefined),
+    },
+    {
+      field: 'da_pct_revenue',
+      label: 'D&A / revenue',
+      value: `${(baseDaPctRevenue * 100).toFixed(2)}%`,
+      origin: ltm?.ltmDepreciationAmortization != null ? 'sourced' : 'default',
+      sourceRef: ltm?.ltmDepreciationAmortization != null
+        ? `XBRL DepreciationDepletionAndAmortization · LTM through ${ltm.periodEnd}`
+        : 'Default 2.5% (no D&A tag in filings)',
+      citationN: ltm?.ltmDepreciationAmortization != null ? 1 : undefined,
+    },
+    {
+      field: 'nwc_pct_revenue',
+      label: 'ΔNWC / Δrevenue',
+      value: `${(nwcPctIncrementalRevenue * 100).toFixed(2)}%`,
+      origin: userSpec('nwc_pct_revenue') ? 'user_assumption' : 'default',
+      sourceRef: fromPrompt('nwc_pct_revenue') ?? 'Default 0% (working capital not modeled when not specified)',
+    },
+    { field: 'historical_cagr', label: 'Historical revenue CAGR (reference)', value: `${(historicalCagr * 100).toFixed(2)}%`, origin: 'sourced', sourceRef: `Derived from ${revenue.length}y revenue series · ${xbrlRef}`, citationN: 1 },
     { field: 'projection_years', label: 'Projection horizon', value: `${projectionYears}y`, origin: userSpec('projection_years') ? 'user_assumption' : 'default', sourceRef: userSpec('projection_years') ? 'Scope card' : 'Manifest default (5y)' },
     { field: 'wacc', label: 'WACC', value: `${waccPct.toFixed(2)}%`, origin: waccMethod === 'manual' && opts.scope.discount_rate != null ? 'user_assumption' : 'default', sourceRef: waccMethod === 'manual' && opts.scope.discount_rate != null ? 'Scope card (manual)' : `Default ${DEFAULT_COMPUTED_WACC_PCT}% (no CAPM input yet)` },
     { field: 'terminal_growth', label: 'Terminal growth (g)', value: `${terminalGrowthPct.toFixed(2)}%`, origin: userSpec('terminal_growth_rate') ? 'user_assumption' : 'default', sourceRef: userSpec('terminal_growth_rate') ? 'Scope card' : 'Manifest default (2.5%)' },
@@ -213,10 +280,12 @@ export async function* runDCFPipeline(opts: {
   const lastProj = projections[projections.length - 1];
   const sumPv = projections.reduce((acc, p) => acc + p.pvFcf, 0);
   const calcSteps = [
-    { step: 'Base EBIT margin', expr: `${fmtMillions(baseEbit)} ÷ ${fmtMillions(baseRevenue)}`, value: `${(baseEbitMargin * 100).toFixed(2)}%` },
-    { step: 'Historical revenue CAGR', expr: `(${fmtMillions(baseRevenue)} ÷ ${fmtMillions(oldestRevenue)})^(1/${yearsSpan}) − 1`, value: `${(historicalCagr * 100).toFixed(2)}%` },
-    { step: `Year-${projectionYears} revenue`, expr: `Decay growth from ${(historicalCagr * 100).toFixed(1)}% toward g=${(g * 100).toFixed(1)}%`, value: fmtMillions(lastProj.revenue) },
-    { step: `Year-${projectionYears} FCF`, expr: `EBIT × (1 − tax) − capex`, value: fmtMillions(lastProj.fcf) },
+    { step: 'EBIT margin (held flat)', expr: userSpec('ebit_margin') ? `from prompt` : `${fmtMillions(baseEbit)} ÷ ${fmtMillions(baseRevenue)}`, value: `${(baseEbitMargin * 100).toFixed(2)}%` },
+    { step: 'Revenue CAGR',
+      expr: projectedRevenueCagr != null ? `from prompt (flat)` : `(${fmtMillions(baseRevenue)} ÷ ${fmtMillions(oldestRevenue)})^(1/${yearsSpan}) − 1 (decayed)`,
+      value: `${((projectedRevenueCagr ?? historicalCagr) * 100).toFixed(2)}%` },
+    { step: `Year-${projectionYears} revenue`, expr: projectedRevenueCagr != null ? `${fmtMillions(baseRevenue)} × (1+${(projectedRevenueCagr*100).toFixed(2)}%)^${projectionYears}` : `Decay growth from ${(historicalCagr * 100).toFixed(1)}% toward g=${(g * 100).toFixed(1)}%`, value: fmtMillions(lastProj.revenue) },
+    { step: `Year-${projectionYears} FCF`, expr: `EBIT×(1−t) + D&A − Capex − ΔNWC = ${fmtMillions(lastProj.taxedEbit)} + ${fmtMillions(lastProj.da)} − ${fmtMillions(lastProj.capex)} − ${fmtMillions(lastProj.deltaNwc)}`, value: fmtMillions(lastProj.fcf) },
     { step: 'PV of projection FCFs', expr: `Σ FCF_t ÷ (1+WACC)^t`, value: fmtMillions(sumPv) },
     terminalMethod === 'gordon_growth'
       ? { step: 'Terminal value (Gordon)', expr: `${fmtMillions(lastProj.fcf)} × (1+${(g * 100).toFixed(2)}%) ÷ (${(wacc * 100).toFixed(2)}% − ${(g * 100).toFixed(2)}%)`, value: fmtMillions(terminalValue) }
@@ -274,33 +343,40 @@ function renderDCFHtml(target: string, r: DCFResultWithPeriod, ticker: string | 
     </div>
   `;
 
+  const cagrLabel = r.inputs.projectedRevenueCagrPct != null
+    ? `${fmtPctRaw(r.inputs.projectedRevenueCagrPct, 2)} (from prompt, flat)`
+    : `${fmtPctRaw(r.inputs.historicalRevenueCagrPct, 2)} (historical, decayed to g)`;
   const assumptions = table({
     headers: ['Assumption', 'Value'],
     rows: [
       ['Base year', `${escape(r.baseYear.period)} · revenue ${fmtMillions(r.baseYear.revenue)} · EBIT ${fmtMillions(r.baseYear.ebit)}`],
-      ['EBIT margin (held flat)', fmtPctRaw(r.inputs.ebitMarginPct, 1)],
-      ['Capex / revenue', fmtPctRaw(r.inputs.capexPctRevenue, 1)],
+      ['Revenue CAGR (forecast)', cagrLabel],
+      ['EBIT margin (held flat)', fmtPctRaw(r.inputs.ebitMarginPct, 2)],
+      ['Capex / revenue', fmtPctRaw(r.inputs.capexPctRevenue, 2)],
+      ['D&A / revenue', fmtPctRaw(r.inputs.daPctRevenue, 2)],
+      ['ΔNWC / Δrevenue', fmtPctRaw(r.inputs.nwcPctIncrementalRevenue, 2)],
       ['Tax rate', fmtPctRaw(r.inputs.taxRatePct, 0)],
-      ['Historical revenue CAGR', fmtPctRaw(r.inputs.historicalRevenueCagrPct, 1)],
       ['WACC', fmtPctRaw(r.inputs.waccPct, 2)],
       ['Terminal growth', fmtPctRaw(r.inputs.terminalGrowthPct, 2)],
       ['Terminal method', r.inputs.terminalMethod === 'gordon_growth' ? 'Gordon Growth' : `Exit Multiple (${r.inputs.exitMultiple ?? 10}x)`],
     ],
   });
 
-  // Projection table
-  const projHeaders = ['Year', 'Revenue', 'EBIT', 'EBIT × (1 - t)', 'Capex', 'FCF', 'Discount factor', 'PV FCF'];
+  // Projection table — full unlevered-FCF bridge so the math is auditable.
+  const projHeaders = ['Year', 'Revenue', 'EBIT', 'EBIT × (1 - t)', '+ D&A', '− Capex', '− ΔNWC', 'FCF', 'Disc factor', 'PV FCF'];
   const projRows = r.projections.map(p => [
     `Year ${p.year}`,
     { value: fmtMillions(p.revenue), numeric: true },
     { value: fmtMillions(p.ebit), numeric: true },
     { value: fmtMillions(p.taxedEbit), numeric: true },
+    { value: fmtMillions(p.da), numeric: true },
     { value: fmtMillions(p.capex), numeric: true },
+    { value: fmtMillions(p.deltaNwc), numeric: true },
     { value: fmtMillions(p.fcf), numeric: true, strong: true },
     { value: p.discountFactor.toFixed(3), numeric: true },
     { value: fmtMillions(p.pvFcf), numeric: true },
   ]);
-  const projection = table({ compact: true, headers: projHeaders, rows: projRows, numericColumns: [1, 2, 3, 4, 5, 6, 7] });
+  const projection = table({ compact: true, headers: projHeaders, rows: projRows, numericColumns: [1, 2, 3, 4, 5, 6, 7, 8, 9] });
 
   // EV summary
   const sumPvFcf = r.projections.reduce((s, p) => s + p.pvFcf, 0);
