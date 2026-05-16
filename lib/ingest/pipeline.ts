@@ -34,13 +34,13 @@ const MIN_CHUNK_CHARS = 200;
 // News gets 2. The section-priority sort means the 6 we keep per filing
 // are the high-value sections; boilerplate is dropped before this even
 // applies via SKIP_EMBED_SECTIONS below.
-const MAX_CHUNKS_PER_FILING = 6;
+const MAX_CHUNKS_PER_FILING = 8;
 const MAX_CHUNKS_PER_NEWS = 2;
 // Total ceiling. Tuned against Voyage's free-tier no-payment-method
-// limits — 10K TPM, 3 RPM. A ~12-chunk batch at ~500 tokens each is
-// ~6K tokens, comfortably under TPM. Larger batches hit 429 and the
-// whole ingest fails.
-const MAX_TOTAL_CHUNKS = 12;
+// limits — 10K TPM, 3 RPM. A ~16-chunk batch at ~500 tokens each is
+// ~8K tokens, fits under TPM. Larger batches hit 429 and the whole
+// ingest fails.
+const MAX_TOTAL_CHUNKS = 16;
 // Sections we skip embedding entirely — boilerplate that wastes Voyage
 // credits and crowds out high-value content for the section re-ranker.
 const SKIP_EMBED_SECTIONS = new Set([
@@ -264,26 +264,39 @@ export async function* ingestEntity(
       // spending Voyage credits on the cover page or table of contents.
       const filtered = allChunks.filter(c => !SKIP_EMBED_SECTIONS.has(c.section ?? 'unknown'));
 
-      // Hoist chunks containing high-value KPI data to the front of the
-      // selection regardless of section tag. These are the patterns that
-      // matter most for analyst queries — income statement table rows,
-      // NRR, RPO, disaggregated revenue. Push them onto the picked list
-      // FIRST, then fill the rest with round-robin section selection.
-      const isHighValue = (content: string): boolean => {
-        return (
-          /Net revenue retention rate/i.test(content) ||
-          /Product revenue\s*\$\s*[\d,]{4,}/i.test(content) ||
-          /\bRevenues?\s*\$\s*[\d,]{4,}\s*\$\s*[\d,]{4,}/i.test(content) ||
-          /Remaining performance obligations/i.test(content) ||
-          /Total operating expenses\s*[\d,]{4,}/i.test(content)
-        );
-      };
-      const highValue = filtered.filter(c => isHighValue(c.content));
-      const remaining = filtered.filter(c => !isHighValue(c.content));
+      // Categorize chunks by the high-value KPI patterns they contain.
+      // Round-robin picks one chunk per category first so we always
+      // capture income-statement, NRR, RPO, etc. — instead of greedily
+      // taking 5 income-statement chunks and missing NRR.
+      const KPI_PATTERNS: Array<{ name: string; re: RegExp }> = [
+        { name: 'nrr', re: /Net revenue retention rate/i },
+        { name: 'product_rev', re: /Product revenue\s*\$\s*[\d,]{4,}/i },
+        { name: 'income_stmt', re: /\bRevenues?\s*\$\s*[\d,]{4,}\s*\$\s*[\d,]{4,}/i },
+        { name: 'rpo', re: /Remaining performance obligations/i },
+        { name: 'opex', re: /Total operating expenses\s*[\d,]{4,}/i },
+        { name: 'gross_margin', re: /Gross profit\s*[\d,]{4,}\s*[\d,]{4,}/i },
+        { name: 'kpi_table', re: /Customers with trailing 12-month product revenue greater than/i },
+      ];
+      const byCategory = new Map<string, typeof filtered>();
+      const isHighValue = new Set<number>();
+      for (const c of filtered) {
+        for (const { name, re } of KPI_PATTERNS) {
+          if (re.test(c.content)) {
+            const list = byCategory.get(name) ?? [];
+            list.push(c);
+            byCategory.set(name, list);
+            isHighValue.add(c.index);
+          }
+        }
+      }
+      for (const list of byCategory.values()) {
+        list.sort((a, b) => a.index - b.index);
+      }
 
-      // Group REMAINING (non-high-value) chunks by section.
+      // Group non-high-value chunks by section for the fill pass.
       const bySection = new Map<string, typeof filtered>();
-      for (const c of remaining) {
+      for (const c of filtered) {
+        if (isHighValue.has(c.index)) continue;
         const s = c.section ?? 'unknown';
         const list = bySection.get(s) ?? [];
         list.push(c);
@@ -293,15 +306,31 @@ export async function* ingestEntity(
         list.sort((a, b) => a.index - b.index);
       }
 
-      // Start the picked list with high-value chunks (those containing
-      // actual revenue numbers, NRR, RPO, etc.) — capped at perDocCap.
+      // Round-robin across KPI categories first — one chunk per category
+      // before doubling up. This is what guarantees the latest 10-Q has
+      // at least one NRR chunk, one income-statement chunk, one RPO
+      // chunk, etc.
       const picked: typeof filtered = [];
-      highValue.sort((a, b) => a.index - b.index);
-      for (const c of highValue.slice(0, perDocCap)) {
-        picked.push(c);
+      const seen = new Set<number>();
+      const categoryOrder = Array.from(byCategory.keys());
+      while (picked.length < perDocCap) {
+        let tookAny = false;
+        for (const cat of categoryOrder) {
+          if (picked.length >= perDocCap) break;
+          const list = byCategory.get(cat);
+          while (list && list.length > 0) {
+            const next = list.shift()!;
+            if (seen.has(next.index)) continue;
+            seen.add(next.index);
+            picked.push(next);
+            tookAny = true;
+            break;
+          }
+        }
+        if (!tookAny) break;
       }
 
-      // Round-robin across sections to fill remaining slots.
+      // Fill remaining slots from section round-robin.
       const sectionOrder = Array.from(bySection.keys()).sort((a, b) =>
         (SECTION_PRIORITY[b] ?? 35) - (SECTION_PRIORITY[a] ?? 35),
       );
@@ -311,7 +340,10 @@ export async function* ingestEntity(
           if (picked.length >= perDocCap) break;
           const list = bySection.get(s);
           if (!list || list.length === 0) continue;
-          picked.push(list.shift()!);
+          const next = list.shift()!;
+          if (seen.has(next.index)) continue;
+          seen.add(next.index);
+          picked.push(next);
           tookAny = true;
         }
         if (!tookAny) break;
