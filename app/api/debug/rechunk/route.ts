@@ -36,6 +36,11 @@ export async function GET(request: NextRequest) {
   const text = stripHtml(html);
 
   const chunks = chunkText(text, { docType });
+  // What does the text actually start with? Verify chunkText's collapsed-text view
+  // matches what we just stripped.
+  const collapsedFirst200 = text.slice(0, 200);
+  const firstChunkContentFirst80 = chunks[0]?.content.slice(0, 80) ?? '(none)';
+  const firstChunkContentPositionInText = text.indexOf(chunks[0]?.content.slice(0, 50) ?? '');
 
   // Find the income statement table position in the original text
   const productRevenueIdx = text.search(/Product revenue\s+\$\s+[\d,]{3,}/);
@@ -79,6 +84,9 @@ export async function GET(request: NextRequest) {
 
   return Response.json({
     textLength: text.length,
+    collapsedFirst200,
+    firstChunkContentFirst80,
+    firstChunkContentPositionInText,
     totalChunks: chunks.length,
     productRevenueLinePosition: productRevenueIdx,
     totalRevenueLinePosition: totalRevenueLineIdx,
