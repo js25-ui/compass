@@ -230,19 +230,38 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
     }
   }
   if (pinnedTarget) {
-    let docsForTarget = 0;
+    let needsIngest = false;
+    let forceRefresh = false;
+    let ingestReason = '';
     try {
       const snap = await getTargetSnapshot(pinnedTarget.id);
-      docsForTarget = snap.documents;
+      // Brand-new target — no documents yet.
+      if (snap.documents === 0) {
+        needsIngest = true;
+        ingestReason = 'corpus has 0 docs for this target';
+      }
+      // Broken state: a prior ingest collected docs but either left zero
+      // chunks (embedding pipeline failed; common when only news_rss
+      // succeeded but SEC filings + chunking didn't) or never reached
+      // 'indexed' status. Without forceRefresh, ingestEntity would
+      // short-circuit on `status === 'indexed'` cache hits.
+      else if (snap.chunks === 0) {
+        needsIngest = true;
+        forceRefresh = true;
+        ingestReason = `corpus has ${snap.documents} docs but 0 chunks — partial-ingest state`;
+      } else if (snap.status !== 'indexed') {
+        needsIngest = true;
+        forceRefresh = true;
+        ingestReason = `target status is "${snap.status}" — prior ingest did not complete`;
+      }
     } catch {
       // Supabase unreachable — let Sonnet flow handle it; it'll explain.
-      docsForTarget = -1;
     }
-    if (docsForTarget === 0) {
+    if (needsIngest) {
       yield {
         type: 'tool_call',
         name: 'ingest_entity',
-        input: { entity: pinnedTarget.name, reason: 'corpus has 0 docs for this target' },
+        input: { entity: pinnedTarget.name, reason: ingestReason, forceRefresh },
       };
       state.ingestStartedAt = Date.now();
       const deadline = state.ingestStartedAt + INGEST_BUDGET_MS;
@@ -250,7 +269,7 @@ export async function* runChatAgent(query: string, opts: ChatAgentOptions = {}):
       let ingestedChunks = 0;
       let ingestError: string | null = null;
       try {
-        for await (const ev of ingestEntity(pinnedTarget.name, { mode: 'full' })) {
+        for await (const ev of ingestEntity(pinnedTarget.name, { mode: 'full', forceRefresh })) {
           if (Date.now() > deadline) {
             ingestError = `ingest exceeded ${INGEST_BUDGET_MS / 1000}s budget; stopped early`;
             break;
