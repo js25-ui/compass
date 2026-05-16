@@ -241,10 +241,19 @@ function detectMarkers(text: string): SectionMarker[] {
  * (first ~1500 chars) since SEC filings don't put a "COVER PAGE" header.
  * Chunks before any detected marker are 'cover_page'; chunks beyond it
  * inherit the latest preceding marker's tag.
+ *
+ * Special case: SEC filings include a Table of Contents block early on
+ * that lists "Condensed Consolidated Statements of Operations" etc. as
+ * navigation entries. Markers inside the ToC block would mis-classify
+ * everything that follows — so we IGNORE markers that fall within the
+ * ToC region (between the TABLE OF CONTENTS heading and the next
+ * non-ToC content). Then we re-detect sections by their actual data
+ * patterns: the income statement is whichever chunk contains
+ * 'Product revenue $X' or 'Total revenue $X' patterns.
  */
 export function tagChunksBySection(
   text: string,
-  chunks: Array<{ charStart: number }>,
+  chunks: Array<{ charStart: number; content: string }>,
   docType: string,
 ): SectionTag[] {
   // For 8-K, every chunk is essentially the body of an event — tag uniformly.
@@ -258,7 +267,51 @@ export function tagChunksBySection(
   }
 
   // 10-Q / 10-K filings: positional cover page, then marker-based lookup.
-  const markers = detectMarkers(text);
+  let markers = detectMarkers(text);
+
+  // Detect the ToC region. The ToC opens at the 'TABLE OF CONTENTS' marker
+  // and ends ~3000-5000 chars later when the actual content starts. Use the
+  // first non-ToC ITEM heading as the lower bound. Drop any markers that
+  // sit inside this region — those are ToC navigation entries pointing at
+  // pages, not the actual sections themselves.
+  const tocMarker = markers.find(m => m.tag === 'table_of_contents');
+  if (tocMarker) {
+    // The first ITEM 2 / mdna / market_risk / risk_factors marker AFTER
+    // the ToC is the start of real content. (Item 1 'Financial Statements'
+    // is too generic and not in our pattern list.) For 10-Q, MDNA is
+    // typically the first real Item heading after the financial statements.
+    const realStart = markers
+      .filter(m => m.start > tocMarker.start && /^(mdna|market_risk|risk_factors|controls_procedures|legal_proceedings)$/.test(m.tag))
+      .map(m => m.start)
+      .sort((a, b) => a - b)[0] ?? (tocMarker.start + 5000);
+    markers = markers.filter(m =>
+      m.start <= tocMarker.start || m.start >= realStart || m.tag === 'table_of_contents',
+    );
+  }
+
+  // Content-based detection of the actual income-statement table. The
+  // table appears after the ToC and is identifiable by 'Product revenue $'
+  // or 'Total revenue $' followed by dollar amounts — a pattern that
+  // doesn't appear in ToC entries or notes prose.
+  const incomeStatementMarkers = findIncomeStatementTables(text, tocMarker?.start ?? 0);
+  for (const pos of incomeStatementMarkers) {
+    markers.push({ start: pos, tag: 'income_statement', priority: 15 });
+  }
+  // Cash flow tables — 'Cash flows from operating activities' followed
+  // by dollar columns.
+  const cashFlowMarkers = findCashFlowTables(text, tocMarker?.start ?? 0);
+  for (const pos of cashFlowMarkers) {
+    markers.push({ start: pos, tag: 'cash_flow', priority: 15 });
+  }
+  // Balance sheet — 'Total assets $' or 'Total liabilities $' followed by
+  // dollar amounts identifies the balance sheet table.
+  const balanceSheetMarkers = findBalanceSheetTables(text, tocMarker?.start ?? 0);
+  for (const pos of balanceSheetMarkers) {
+    markers.push({ start: pos, tag: 'balance_sheet', priority: 15 });
+  }
+
+  markers.sort((a, b) => a.start - b.start || b.priority - a.priority);
+
   const COVER_PAGE_END = 1500;
   return chunks.map(c => {
     if (c.charStart < COVER_PAGE_END && (markers.length === 0 || markers[0].start > COVER_PAGE_END)) {
@@ -271,6 +324,43 @@ export function tagChunksBySection(
     }
     return current;
   });
+}
+
+/** Detect actual income-statement table positions by data pattern, not by
+ *  section header. Looks for 'Product revenue $X,XXX' or 'Total revenue $X,XXX'
+ *  patterns that appear in income statements but not in ToC or notes. */
+function findIncomeStatementTables(text: string, skipBefore: number): number[] {
+  const positions: number[] = [];
+  // Pattern: line-item label + $ + 1-7 digit number with commas.
+  const pattern = /(?:Product revenue|Total revenue|Total revenues?|Revenues?)\s*\$\s*[\d,]{3,}/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index < skipBefore) continue;
+    positions.push(m.index);
+  }
+  return positions;
+}
+
+function findCashFlowTables(text: string, skipBefore: number): number[] {
+  const positions: number[] = [];
+  const pattern = /(?:Cash flows from operating activities|Net cash (?:provided by|used in) operating)/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index < skipBefore) continue;
+    positions.push(m.index);
+  }
+  return positions;
+}
+
+function findBalanceSheetTables(text: string, skipBefore: number): number[] {
+  const positions: number[] = [];
+  const pattern = /Total assets\s*\$\s*[\d,]{3,}|Total liabilities and stockholders'?\s+equity\s*\$\s*[\d,]{3,}/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index < skipBefore) continue;
+    positions.push(m.index);
+  }
+  return positions;
 }
 
 /**
