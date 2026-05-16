@@ -541,7 +541,13 @@ function formatSearchResult(chunks: RetrievedChunk[], state: AgentState, label: 
       filed_at: chunk.filedAt,
       is_primary: chunk.isPrimarySource,
       url: chunk.documentUrl,
-      excerpt: chunk.content.slice(0, 800),
+      // Pass the full chunk (~2K chars) so Sonnet sees the table rows
+      // that follow the chunk's opening prose. The previous 800-char
+      // truncation was hiding the actual income-statement table data
+      // because the chunk opens with the closing sentences of an
+      // earlier note paragraph; the financial-statement table starts
+      // around char 1000-1500.
+      excerpt: chunk.content.slice(0, 2200),
     };
   });
 
