@@ -263,18 +263,40 @@ export async function* ingestEntity(
       // Drop boilerplate sections before any ranking — never worth
       // spending Voyage credits on the cover page or table of contents.
       const filtered = allChunks.filter(c => !SKIP_EMBED_SECTIONS.has(c.section ?? 'unknown'));
-      // Order by section priority (income_statement / MD&A first), then
-      // preserve original position as tie-breaker. Slice to perDocCap.
-      const ordered = [...filtered].sort((a, b) => {
-        const ap = SECTION_PRIORITY[a.section ?? 'unknown'] ?? 35;
-        const bp = SECTION_PRIORITY[b.section ?? 'unknown'] ?? 35;
-        if (bp !== ap) return bp - ap;
-        return a.index - b.index;
-      }).slice(0, perDocCap);
-      // Re-sort by original chunk index so embeddings + storage stay in
-      // document-reading order for any consumer that cares.
-      ordered.sort((a, b) => a.index - b.index);
-      for (const c of ordered) {
+
+      // Group chunks by section, ordered by chunk index within each section.
+      const bySection = new Map<string, typeof filtered>();
+      for (const c of filtered) {
+        const s = c.section ?? 'unknown';
+        const list = bySection.get(s) ?? [];
+        list.push(c);
+        bySection.set(s, list);
+      }
+      for (const list of bySection.values()) {
+        list.sort((a, b) => a.index - b.index);
+      }
+
+      // Round-robin select chunks across sections in priority order. For
+      // each pass, take the FIRST remaining chunk from each section
+      // (highest-priority section first). Stops when we hit perDocCap
+      // for this doc or the total cap globally.
+      const sectionOrder = Array.from(bySection.keys()).sort((a, b) =>
+        (SECTION_PRIORITY[b] ?? 35) - (SECTION_PRIORITY[a] ?? 35),
+      );
+      const picked: typeof filtered = [];
+      while (picked.length < perDocCap) {
+        let tookAny = false;
+        for (const s of sectionOrder) {
+          if (picked.length >= perDocCap) break;
+          const list = bySection.get(s);
+          if (!list || list.length === 0) continue;
+          picked.push(list.shift()!);
+          tookAny = true;
+        }
+        if (!tookAny) break;
+      }
+      picked.sort((a, b) => a.index - b.index);
+      for (const c of picked) {
         if (texts.length >= MAX_TOTAL_CHUNKS) break outer;
         texts.push(c.content);
         meta.push({ docId: doc.id, index: c.index, section: c.section ?? null });

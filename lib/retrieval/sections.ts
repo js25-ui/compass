@@ -145,9 +145,11 @@ const SECTION_PATTERNS: SectionPattern[] = [
   {
     tag: 'mdna',
     patterns: [
-      /\bITEM\s+2\.?\s+MANAGEMENT['’]?S DISCUSSION AND ANALYSIS/gi,
-      /\bITEM\s+7\.?\s+MANAGEMENT['’]?S DISCUSSION AND ANALYSIS/gi,
-      /\bManagement['’]?s Discussion and Analysis of Financial Condition\b/gi,
+      // Handle both 'MANAGEMENT'S' and 'MANAGEMENT S' (apostrophe stripped
+      // to whitespace by stripHtml entity-decoding). Case-insensitive.
+      /\bITEM\s+2\.?\s+MANAGEMENT(?:['’’]?S|\s+S)\s+DISCUSSION AND ANALYSIS/gi,
+      /\bITEM\s+7\.?\s+MANAGEMENT(?:['’’]?S|\s+S)\s+DISCUSSION AND ANALYSIS/gi,
+      /\bManagement(?:['’’]?s|\s+s)\s+Discussion and Analysis of Financial Condition\b/gi,
     ],
     priority: 9,
   },
