@@ -15,6 +15,16 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const targetId = url.searchParams.get('target_id');
   const query = url.searchParams.get('q');
+  const fullDocId = url.searchParams.get('doc_id');
+  if (fullDocId) {
+    const sb = getSupabaseService();
+    const res = await sb
+      .from('chunks')
+      .select('chunk_index, section, content')
+      .eq('document_id', fullDocId)
+      .order('chunk_index');
+    return Response.json({ docId: fullDocId, chunks: res.data });
+  }
   if (!targetId) {
     return Response.json({ error: 'target_id is required' }, { status: 400 });
   }
