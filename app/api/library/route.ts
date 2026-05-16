@@ -12,6 +12,10 @@ interface LibraryItem {
   source: string;
   docType: string;
   filedAt: string | null;
+  /** When the filed_at came from a canonical meta-tag fetch instead of the
+   *  feed's pubDate, this is set. Lets the Work tab show provenance. */
+  feedReportedDate?: string | null;
+  canonicalDate?: string | null;
   isPrimary: boolean;
 }
 
@@ -41,7 +45,7 @@ export async function GET(request: NextRequest) {
     // Items in window, newest first.
     const { data: itemRows, error: itemErr } = await sb
       .from('documents')
-      .select('id, target_id, source, doc_type, title, url, filed_at, is_primary_source')
+      .select('id, target_id, source, doc_type, title, url, filed_at, is_primary_source, metadata')
       .gte('filed_at', cutoff)
       .order('filed_at', { ascending: false })
       .limit(limit);
@@ -50,17 +54,23 @@ export async function GET(request: NextRequest) {
     type DocRow = {
       id: string; target_id: string | null; source: string; doc_type: string;
       title: string; url: string | null; filed_at: string | null; is_primary_source: boolean;
+      metadata: Record<string, unknown> | null;
     };
-    const items: LibraryItem[] = (itemRows ?? []).map((r: DocRow) => ({
-      documentId: r.id,
-      targetId: r.target_id,
-      title: r.title,
-      url: r.url,
-      source: r.source,
-      docType: r.doc_type,
-      filedAt: r.filed_at,
-      isPrimary: r.is_primary_source,
-    }));
+    const items: LibraryItem[] = (itemRows ?? []).map((r: DocRow) => {
+      const meta = r.metadata ?? {};
+      return {
+        documentId: r.id,
+        targetId: r.target_id,
+        title: r.title,
+        url: r.url,
+        source: r.source,
+        docType: r.doc_type,
+        filedAt: r.filed_at,
+        feedReportedDate: typeof meta.feed_pub_date === 'string' ? meta.feed_pub_date : null,
+        canonicalDate: typeof meta.canonical_pub_date === 'string' ? meta.canonical_pub_date : null,
+        isPrimary: r.is_primary_source,
+      };
+    });
 
     // Total corpus size (head-only count) — informational, no window filter.
     const totalRes = await sb.from('documents').select('id', { count: 'exact', head: true });
