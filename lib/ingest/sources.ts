@@ -3,6 +3,7 @@ import { fetchFilingText, listFilings } from '@/lib/retrieval/edgar';
 import { fetchSeries, MACRO_SERIES, type MacroSeriesKey } from '@/lib/retrieval/fred';
 import { searchArticles } from '@/lib/retrieval/gdelt';
 import { fetchNewsForEntity } from '@/lib/retrieval/news_rss';
+import { reconcileArticleDate, resolveCanonicalDates } from '@/lib/retrieval/article_date';
 import { getAnnualFinancials } from '@/lib/retrieval/xbrl';
 import type { ResolvedEntity } from '@/lib/lookup/resolve';
 import type { TimeRange } from '@/lib/queries/time_range';
@@ -111,20 +112,34 @@ export async function fetchNews(
   opts: ArticleFetchOpts,
 ): Promise<PendingDocument[]> {
   const items = await fetchNewsForEntity({ ticker: entity.ticker, query: entity.name });
-  return items.slice(0, opts.maxArticles).map(item => ({
-    id: `news-${shortHash(item.link)}`,
-    source: 'news_rss',
-    doc_type: 'news',
-    title: item.title,
-    url: item.link,
-    content_full: item.description ?? item.title,
-    filed_at: item.pubDate,
-    metadata: {
-      kind: 'news_article',
-      rss_source: item.source,
-    } satisfies Json,
-    is_primary_source: false,
-  }));
+  const sliced = items.slice(0, opts.maxArticles);
+  // Best-effort: fetch each article's canonical published-time from
+  // <meta property="article:published_time"> etc. RSS pubDate from
+  // Google News / Yahoo Finance reflects when the AGGREGATOR indexed
+  // the article, which for syndicated content (MSN re-hosting USA
+  // Today, Yahoo News re-hosting Reuters) can be days off the real
+  // publication. reconcileArticleDate prefers the canonical date when
+  // it's meaningfully earlier than the feed date.
+  const canonicalDates = await resolveCanonicalDates(sliced.map(s => s.link));
+  return sliced.map((item, i) => {
+    const resolved = reconcileArticleDate(item.pubDate, canonicalDates[i]);
+    return {
+      id: `news-${shortHash(item.link)}`,
+      source: 'news_rss',
+      doc_type: 'news',
+      title: item.title,
+      url: item.link,
+      content_full: item.description ?? item.title,
+      filed_at: resolved,
+      metadata: {
+        kind: 'news_article',
+        rss_source: item.source,
+        feed_pub_date: item.pubDate ?? null,
+        canonical_pub_date: canonicalDates[i] ?? null,
+      } satisfies Json,
+      is_primary_source: false,
+    };
+  });
 }
 
 export async function fetchGdelt(
@@ -140,22 +155,33 @@ export async function fetchGdelt(
     timespanHours,
   });
 
-  return articles.map(a => ({
-    id: `gdelt-${shortHash(a.url)}`,
-    source: 'gdelt',
-    doc_type: 'news',
-    title: a.title,
-    url: a.url,
-    content_full: a.title,                 // GDELT doesn't surface body text in the free tier
-    filed_at: parseGdeltDate(a.seendate),
-    metadata: {
-      kind: 'gdelt_article',
-      domain: a.domain,
-      language: a.language,
-      sourcecountry: a.sourcecountry,
-    } satisfies Json,
-    is_primary_source: false,
-  }));
+  // GDELT's `seendate` is the crawler's first-observed time, not the
+  // publication time. Same canonical-date pass we use for RSS handles
+  // this — pulls article:published_time from the article page itself.
+  const seenDates = articles.map(a => parseGdeltDate(a.seendate));
+  const canonicalDates = await resolveCanonicalDates(articles.map(a => a.url));
+
+  return articles.map((a, i) => {
+    const resolved = reconcileArticleDate(seenDates[i], canonicalDates[i]);
+    return {
+      id: `gdelt-${shortHash(a.url)}`,
+      source: 'gdelt',
+      doc_type: 'news',
+      title: a.title,
+      url: a.url,
+      content_full: a.title,                 // GDELT doesn't surface body text in the free tier
+      filed_at: resolved,
+      metadata: {
+        kind: 'gdelt_article',
+        domain: a.domain,
+        language: a.language,
+        sourcecountry: a.sourcecountry,
+        gdelt_seen_date: seenDates[i] ?? null,
+        canonical_pub_date: canonicalDates[i] ?? null,
+      } satisfies Json,
+      is_primary_source: false,
+    };
+  });
 }
 
 function parseGdeltDate(seendate: string): string | null {
