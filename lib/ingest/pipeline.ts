@@ -264,9 +264,26 @@ export async function* ingestEntity(
       // spending Voyage credits on the cover page or table of contents.
       const filtered = allChunks.filter(c => !SKIP_EMBED_SECTIONS.has(c.section ?? 'unknown'));
 
-      // Group chunks by section, ordered by chunk index within each section.
+      // Hoist chunks containing high-value KPI data to the front of the
+      // selection regardless of section tag. These are the patterns that
+      // matter most for analyst queries — income statement table rows,
+      // NRR, RPO, disaggregated revenue. Push them onto the picked list
+      // FIRST, then fill the rest with round-robin section selection.
+      const isHighValue = (content: string): boolean => {
+        return (
+          /Net revenue retention rate/i.test(content) ||
+          /Product revenue\s*\$\s*[\d,]{4,}/i.test(content) ||
+          /\bRevenues?\s*\$\s*[\d,]{4,}\s*\$\s*[\d,]{4,}/i.test(content) ||
+          /Remaining performance obligations/i.test(content) ||
+          /Total operating expenses\s*[\d,]{4,}/i.test(content)
+        );
+      };
+      const highValue = filtered.filter(c => isHighValue(c.content));
+      const remaining = filtered.filter(c => !isHighValue(c.content));
+
+      // Group REMAINING (non-high-value) chunks by section.
       const bySection = new Map<string, typeof filtered>();
-      for (const c of filtered) {
+      for (const c of remaining) {
         const s = c.section ?? 'unknown';
         const list = bySection.get(s) ?? [];
         list.push(c);
@@ -276,14 +293,18 @@ export async function* ingestEntity(
         list.sort((a, b) => a.index - b.index);
       }
 
-      // Round-robin select chunks across sections in priority order. For
-      // each pass, take the FIRST remaining chunk from each section
-      // (highest-priority section first). Stops when we hit perDocCap
-      // for this doc or the total cap globally.
+      // Start the picked list with high-value chunks (those containing
+      // actual revenue numbers, NRR, RPO, etc.) — capped at perDocCap.
+      const picked: typeof filtered = [];
+      highValue.sort((a, b) => a.index - b.index);
+      for (const c of highValue.slice(0, perDocCap)) {
+        picked.push(c);
+      }
+
+      // Round-robin across sections to fill remaining slots.
       const sectionOrder = Array.from(bySection.keys()).sort((a, b) =>
         (SECTION_PRIORITY[b] ?? 35) - (SECTION_PRIORITY[a] ?? 35),
       );
-      const picked: typeof filtered = [];
       while (picked.length < perDocCap) {
         let tookAny = false;
         for (const s of sectionOrder) {
