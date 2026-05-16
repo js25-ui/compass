@@ -54,12 +54,15 @@ export async function getLtmFinancials(cik: string): Promise<LtmFinancials | nul
   const ltmGP = computeLtm(gp);
 
   // YoY growth: compute LTM at the equivalent period one year ago and
-  // compare. We need the same period_end shifted by ~365 days.
+  // compare. We need the LTM ending ~365 days before `ltmRev.periodEnd`.
   let growth: number | null = null;
   if (ltmRev?.value != null && ltmRev.periodEnd) {
-    const prior = computeLtm(rev, ltmRev.periodEnd);
-    if (prior?.value != null && prior.value > 0) {
-      growth = ((ltmRev.value - prior.value) / prior.value) * 100;
+    const priorEndIso = shiftDateIsoByDays(ltmRev.periodEnd, -365);
+    if (priorEndIso) {
+      const prior = computeLtm(rev, priorEndIso);
+      if (prior?.value != null && prior.value > 0) {
+        growth = ((ltmRev.value - prior.value) / prior.value) * 100;
+      }
     }
   }
 
@@ -89,7 +92,10 @@ async function mergeConcepts(cik: string, candidates: readonly string[]): Promis
   for (const c of candidates) {
     const facts = await getConcept(cik, c);
     for (const f of facts) {
-      const key = `${f.fy}|${f.fp}|${f.end}|${f.form}`;
+      // Include start in the key so YTD (e.g. start=2025-02-01, end=2025-10-31)
+      // and QTD (start=2025-08-01, end=2025-10-31) variants of the same fp
+      // don't collide.
+      const key = `${f.fy}|${f.fp}|${f.start ?? ''}|${f.end}|${f.form}`;
       if (!seen.has(key)) seen.set(key, f);
     }
   }
@@ -218,6 +224,13 @@ function findPriorYearYtd(qFacts: XbrlFact[], endDate: string, ytdDays: number):
     }
   }
   return best;
+}
+
+function shiftDateIsoByDays(iso: string, deltaDays: number): string | null {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const shifted = new Date(t + deltaDays * 24 * 60 * 60 * 1000);
+  return shifted.toISOString().slice(0, 10);
 }
 
 function pickLatestFiled(facts: XbrlFact[]): string | null {
