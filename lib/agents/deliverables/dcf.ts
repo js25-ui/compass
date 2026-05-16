@@ -126,24 +126,29 @@ export async function* runDCFPipeline(opts: {
     ? Math.pow(baseRevenue / oldestRevenue, 1 / yearsSpan) - 1
     : 0;
 
-  // Resolve scope-driven parameters.
-  const projectionYears = Number(opts.scope.projection_years ?? 5);
+  // Resolve scope-driven parameters. Use toPct() instead of raw Number(...)
+  // so the pipeline tolerates string inputs ("16", "16%", " 16.0 ") that
+  // can arrive when a value round-trips through form submission, JSON, or
+  // an LLM-extracted scope. A silent NaN→default fallback here was the
+  // root-cause class behind every "user said X, model used default" audit
+  // finding to date.
+  const projectionYears = toPct(opts.scope.projection_years, 5);
   const waccMethod = opts.scope.wacc_method ?? 'computed';
   const waccPct = waccMethod === 'manual' && opts.scope.discount_rate != null
-    ? Number(opts.scope.discount_rate)
+    ? toPct(opts.scope.discount_rate, DEFAULT_COMPUTED_WACC_PCT)
     : DEFAULT_COMPUTED_WACC_PCT;
   const wacc = waccPct / 100;
-  const terminalGrowthPct = Number(opts.scope.terminal_growth_rate ?? 2.5);
+  const terminalGrowthPct = toPct(opts.scope.terminal_growth_rate, 2.5);
   const g = terminalGrowthPct / 100;
-  const taxRatePct = Number(opts.scope.tax_rate ?? 25);
+  const taxRatePct = toPct(opts.scope.tax_rate, 25);
   const terminalMethod = (opts.scope.terminal_method ?? 'gordon_growth') as 'gordon_growth' | 'exit_multiple';
-  const exitMultiple = opts.scope.exit_multiple != null ? Number(opts.scope.exit_multiple) : null;
+  const exitMultiple = opts.scope.exit_multiple != null ? toPct(opts.scope.exit_multiple, 10) : null;
 
   // User-supplied projection drivers (% inputs). When set, override historical.
-  const projectedRevenueCagr = opts.scope.revenue_cagr != null ? Number(opts.scope.revenue_cagr) / 100 : undefined;
-  const baseEbitMargin = opts.scope.ebit_margin != null ? Number(opts.scope.ebit_margin) / 100 : histEbitMargin;
-  const baseCapexPctRevenue = opts.scope.capex_pct_revenue != null ? Number(opts.scope.capex_pct_revenue) / 100 : histCapexPctRevenue;
-  const nwcPctIncrementalRevenue = opts.scope.nwc_pct_revenue != null ? Number(opts.scope.nwc_pct_revenue) / 100 : 0;
+  const projectedRevenueCagr = opts.scope.revenue_cagr != null ? toPct(opts.scope.revenue_cagr, 0) / 100 : undefined;
+  const baseEbitMargin = opts.scope.ebit_margin != null ? toPct(opts.scope.ebit_margin, histEbitMargin * 100) / 100 : histEbitMargin;
+  const baseCapexPctRevenue = opts.scope.capex_pct_revenue != null ? toPct(opts.scope.capex_pct_revenue, histCapexPctRevenue * 100) / 100 : histCapexPctRevenue;
+  const nwcPctIncrementalRevenue = opts.scope.nwc_pct_revenue != null ? toPct(opts.scope.nwc_pct_revenue, 0) / 100 : 0;
   const baseDaPctRevenue = histDaPctRevenue;
 
   yield {
@@ -297,6 +302,26 @@ export async function* runDCFPipeline(opts: {
 
   yield { type: 'token', text: renderDCFHtml(target, result, pre.entity?.ticker ?? null) };
   yield { type: 'done' };
+}
+
+/**
+ * Coerce a scope value to a finite number. Handles numbers, numeric strings,
+ * percent-formatted strings ("16%"), and stripped-percent ("16"). Returns
+ * `fallback` for null / undefined / unparseable. Always logs to the console
+ * when a value would have silently fallen through — surfaces extractor bugs.
+ */
+function toPct(v: unknown, fallback: number): number {
+  if (v == null) return fallback;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
+  if (typeof v === 'string') {
+    const cleaned = v.trim().replace(/%$/, '').trim();
+    const n = Number(cleaned);
+    if (Number.isFinite(n)) return n;
+    // eslint-disable-next-line no-console
+    console.warn(`DCF scope value unparseable, falling back to ${fallback}: ${JSON.stringify(v)}`);
+    return fallback;
+  }
+  return fallback;
 }
 
 function refusalCard(target: string, headline: string, body: string): string {
