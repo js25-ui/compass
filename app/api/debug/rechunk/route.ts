@@ -59,14 +59,33 @@ export async function GET(request: NextRequest) {
     sectionCounts[s] = (sectionCounts[s] ?? 0) + 1;
   }
 
+  // For each chunk, verify whether its content actually appears at the
+  // reported charStart in the original text.
+  const verified = chunks.slice(0, 40).map(c => {
+    const expectedFromStart = text.slice(c.charStart, c.charStart + 80);
+    const actualStart = c.content.slice(0, 80);
+    const matches = expectedFromStart === actualStart;
+    return {
+      index: c.index,
+      section: c.section,
+      charStart: c.charStart,
+      charEnd: c.charEnd,
+      contentLen: c.content.length,
+      positionMatches: matches,
+      expectedAtCharStart: expectedFromStart,
+      actualContentStart: actualStart,
+    };
+  });
+
   return Response.json({
     textLength: text.length,
     totalChunks: chunks.length,
     productRevenueLinePosition: productRevenueIdx,
     totalRevenueLinePosition: totalRevenueLineIdx,
     sectionCounts,
-    chunks: chunkSummary.filter(c => c.containsProductRevenue || c.containsTotalRevenue).concat(
-      chunkSummary.filter(c => c.section === 'income_statement').slice(0, 10),
-    ),
+    incomeStatementChunks: chunks.filter(c => c.section === 'income_statement').map(c => ({
+      index: c.index, charStart: c.charStart, contentStart: c.content.slice(0, 100),
+    })).slice(0, 5),
+    verifiedFirst40: verified,
   });
 }
