@@ -268,7 +268,23 @@ export function tagChunksBySection(
     return chunks.map(() => 'news_body');
   }
 
-  // 10-Q / 10-K filings: positional cover page, then marker-based lookup.
+  // 10-Q / 10-K filings: content-based section detection. Positional
+  // marker matching mis-tags chunks because (a) the ToC block lists every
+  // ITEM heading + 'Consolidated Statements of Operations' as page-number
+  // references that the regex picks up before the real headings, and
+  // (b) the 'real' section headers are sometimes absent in the stripped
+  // text — for instance, an income-statement TABLE appears directly
+  // after the balance sheet table with no intervening heading. Looking
+  // at each chunk's OWN content is more reliable.
+  return chunks.map((c, i) => {
+    // Cover page is positional — the cover sheet doesn't have a heading.
+    if (c.charStart < 1500) return 'cover_page';
+    return detectSectionFromChunkContent(c.content);
+  });
+}
+
+/** Original positional-marker tagger retained for reference / future use. */
+function _tagBySectionMarkers(text: string, chunks: Array<{ charStart: number }>): SectionTag[] {
   let markers = detectMarkers(text);
 
   // Detect the ToC region. The ToC opens at the 'TABLE OF CONTENTS' marker
@@ -367,29 +383,54 @@ function findBalanceSheetTables(text: string, skipBefore: number): number[] {
  * just before the chunk's window rather than inside it.
  */
 export function detectSectionFromChunkContent(content: string): SectionTag {
-  // Scan only the first ~400 chars — section headers typically sit near
-  // the start when they're present in a chunk.
-  const head = content.slice(0, 600);
+  // Scan the WHOLE chunk content — financial-statement tables often appear
+  // in the middle of a chunk (after balance sheet content earlier in the
+  // same chunk). Looking only at the head misses the table.
+
+  // Highest-signal patterns first: actual table-row patterns that only
+  // appear in financial-statement tables, not in ToC or MD&A prose.
+  if (/Product revenue\s*\$\s*[\d,]{4,}/i.test(content)) return 'income_statement';
+  if (/\bRevenues?\s*\$\s*[\d,]{4,}\s*\$\s*[\d,]{4,}/i.test(content)) return 'income_statement';
+  if (/Cost of revenue\s*[\d,]{3,}/i.test(content)) return 'income_statement';
+  if (/Gross profit\s*[\d,]{3,}/i.test(content)) return 'income_statement';
+  if (/Net loss\s*\(\s*[\d,]{3,}/i.test(content)) return 'income_statement';
+  if (/Total operating expenses\s*[\d,]{4,}/i.test(content)) return 'income_statement';
+
+  if (/Cash flows from operating activit/i.test(content)) return 'cash_flow';
+  if (/Net cash (?:provided by|used in) operating/i.test(content)) return 'cash_flow';
+
+  if (/Total assets\s*\$\s*[\d,]{4,}/i.test(content)) return 'balance_sheet';
+  if (/Total liabilities and stockholders/i.test(content)) return 'balance_sheet';
+
+  if (/(?:Net|Dollar-based) (?:revenue|net) retention rate/i.test(content)) return 'mdna';
+  if (/Remaining performance obligations/i.test(content)) return 'mdna';
+
+  // Statement of stockholders' equity — has Common Stock, Treasury Stock columns.
+  if (/Common Stock.*Treasury Stock.*Additional Paid-in Capital/i.test(content)) {
+    return 'equity_statement';
+  }
+
+  // Heading-based fallbacks for the head of the chunk.
+  const head = content.slice(0, 800);
   for (const { tag, patterns } of SECTION_PATTERNS) {
     for (const p of patterns) {
       p.lastIndex = 0;
       if (p.test(head)) return tag;
     }
   }
-  // Heuristic body-based hints for legacy chunks with no heading:
-  //   - Tabular numbers across multiple rows → likely a financial statement
-  //   - "We", "Our", "The Company" prose → MD&A or Risk Factors
-  //   - "may", "could", "anticipates", "believes" verbs in past tense → MDA / FLS
+
   if (/\b(forward[- ]looking|undue reliance|safe harbor|do not place undue)\b/i.test(head)) {
     return 'forward_looking';
   }
-  // Multiple $ amounts in close succession + short labels → statement table.
-  const dollarSigns = (head.match(/\$\s*\d/g) ?? []).length;
-  if (dollarSigns >= 4) {
-    if (/cash flow|operating activit|investing activit|financing activit/i.test(head)) return 'cash_flow';
-    if (/total assets|total liabilities|stockholders'? equity/i.test(head)) return 'balance_sheet';
+
+  // Dollar-density heuristic.
+  const dollarSigns = (content.match(/\$\s*\d/g) ?? []).length;
+  if (dollarSigns >= 5) {
+    if (/cash flow|operating activit|investing activit|financing activit/i.test(content)) return 'cash_flow';
+    if (/total assets|total liabilities|stockholders'? equity/i.test(content)) return 'balance_sheet';
     return 'income_statement';
   }
+
   if (/\b(risk factors?|adverse|materially affect|could harm)\b/i.test(head)) return 'risk_factors';
   if (/\b(we|our|the company|management)\b/i.test(head) && /\b(quarter|year|increase|decrease|grew|declined)\b/i.test(head)) {
     return 'mdna';
