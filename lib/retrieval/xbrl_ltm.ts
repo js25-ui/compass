@@ -19,6 +19,14 @@ export interface LtmFinancials {
   ltmRevenue: number | null;
   ltmOperatingIncome: number | null;
   ltmGrossProfit: number | null;
+  /** Depreciation & amortization (cash-flow add-back). */
+  ltmDepreciationAmortization: number | null;
+  /** Stock-based compensation (cash-flow add-back). */
+  ltmStockBasedCompensation: number | null;
+  /** EBITDA = operating_income + D&A. Null when OI or D&A is null. */
+  ltmEbitda: number | null;
+  /** Adjusted EBITDA = EBITDA + SBC. Null when any input is null. */
+  ltmAdjustedEbitda: number | null;
   /** YoY growth on LTM revenue vs the equivalent period one year prior. */
   ltmRevenueGrowthPct: number | null;
   /** Most recent filing date in ANY fact for this issuer (max filed). */
@@ -36,6 +44,16 @@ const REVENUE_CONCEPTS = [
 ] as const;
 const OPERATING_INCOME_CONCEPTS = ['OperatingIncomeLoss'] as const;
 const GROSS_PROFIT_CONCEPTS = ['GrossProfit'] as const;
+// Depreciation & Amortization candidates — issuers tag D&A under multiple
+// concepts. DepreciationDepletionAndAmortization is the SaaS-common one;
+// DepreciationAndAmortization is older; Depreciation alone is rarer and
+// risks under-counting (amortization of intangibles excluded).
+const DA_CONCEPTS = [
+  'DepreciationDepletionAndAmortization',
+  'DepreciationAndAmortization',
+  'Depreciation',
+] as const;
+const SBC_CONCEPTS = ['ShareBasedCompensation'] as const;
 
 /**
  * Public entry point — call once per peer. Hits the cached
@@ -48,10 +66,24 @@ export async function getLtmFinancials(cik: string): Promise<LtmFinancials | nul
   const rev = await mergeConcepts(cik, REVENUE_CONCEPTS);
   const oi = await mergeConcepts(cik, OPERATING_INCOME_CONCEPTS);
   const gp = await mergeConcepts(cik, GROSS_PROFIT_CONCEPTS);
+  const da = await mergeConcepts(cik, DA_CONCEPTS);
+  const sbc = await mergeConcepts(cik, SBC_CONCEPTS);
 
   const ltmRev = computeLtm(rev);
   const ltmOI = computeLtm(oi);
   const ltmGP = computeLtm(gp);
+  const ltmDA = computeLtm(da);
+  const ltmSBC = computeLtm(sbc);
+
+  // EBITDA = OI + D&A. Adjusted EBITDA adds back SBC (the standard
+  // software-comps adjustment). Either can be null if any input is null,
+  // and we leave the decision of which to display to the caller.
+  const ebitda = ltmOI?.value != null && ltmDA?.value != null
+    ? ltmOI.value + ltmDA.value
+    : null;
+  const adjEbitda = ebitda != null && ltmSBC?.value != null
+    ? ebitda + ltmSBC.value
+    : null;
 
   // YoY growth: compute LTM at the equivalent period one year ago and
   // compare. We need the LTM ending ~365 days before `ltmRev.periodEnd`.
@@ -68,12 +100,16 @@ export async function getLtmFinancials(cik: string): Promise<LtmFinancials | nul
 
   // Find max filed date across the merged concepts (used by the staleness
   // filter — companies acquired / taken private stop filing).
-  const latestFiled = pickLatestFiled([...rev, ...oi, ...gp]);
+  const latestFiled = pickLatestFiled([...rev, ...oi, ...gp, ...da, ...sbc]);
 
   return {
     ltmRevenue: ltmRev?.value ?? null,
     ltmOperatingIncome: ltmOI?.value ?? null,
     ltmGrossProfit: ltmGP?.value ?? null,
+    ltmDepreciationAmortization: ltmDA?.value ?? null,
+    ltmStockBasedCompensation: ltmSBC?.value ?? null,
+    ltmEbitda: ebitda,
+    ltmAdjustedEbitda: adjEbitda,
     ltmRevenueGrowthPct: growth,
     latestFilingDate: latestFiled,
     periodEnd: ltmRev?.periodEnd ?? ltmOI?.periodEnd ?? ltmGP?.periodEnd ?? null,
