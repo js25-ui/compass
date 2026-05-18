@@ -158,6 +158,10 @@ const MAX_CANDIDATES = 18;
 // Over-propose multiplier — Sonnet returns ~1.5× the requested count so
 // the recency filter has slack.
 const OVERPROPOSE_FACTOR = 1.6;
+// Adj EBITDA margin floor for EBITDA multiples to be "meaningful". Below
+// this the denominator is so small that EV/EBITDA balloons into the
+// hundreds and contaminates median/mean. Industry rule of thumb is ~5%.
+const EBITDA_MARGIN_MEANINGFUL_THRESHOLD = 5;
 
 export async function* runTradingCompsPipeline(opts: {
   query: string;
@@ -239,19 +243,31 @@ Original ask: ${opts.query}`;
     if (survivors.length >= numComps) break;
     const entry = await findByTicker(p.ticker.toUpperCase());
     if (!entry) {
-      droppedPeers.push({ ticker: p.ticker, name: p.name, reason: 'ticker not found in SEC universe (delisted or non-US)' });
+      // Report only what we can verify. We KNOW the ticker isn't in the
+      // SEC ticker registry. We do NOT know whether the company is
+      // delisted, non-US, or merely uses a ticker variant — don't
+      // hallucinate a cause.
+      droppedPeers.push({ ticker: p.ticker, name: p.name, reason: 'ticker not found in SEC ticker registry' });
       continue;
     }
     const ltm = await getLtmFinancialsSafe(entry.cik);
-    if (!ltm || ltm.ltmRevenue == null || !ltm.latestFilingDate) {
-      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'no XBRL revenue facts available' });
+    if (!ltm) {
+      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'XBRL companyfacts fetch failed or returned null' });
+      continue;
+    }
+    if (ltm.ltmRevenue == null) {
+      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'XBRL revenue series unparseable for known concepts' });
+      continue;
+    }
+    if (!ltm.latestFilingDate) {
+      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'XBRL data present but no filing-date field' });
       continue;
     }
     if (ltm.latestFilingDate < recencyCutoff) {
       droppedPeers.push({
         ticker: p.ticker,
         name: entry.name,
-        reason: `most recent filing ${ltm.latestFilingDate} is older than ${FILING_RECENCY_DAYS} days — likely delisted / acquired`,
+        reason: `most recent filing ${ltm.latestFilingDate} is older than ${FILING_RECENCY_DAYS} days`,
       });
       continue;
     }
@@ -401,6 +417,18 @@ async function getLtmFinancialsSafe(cik: string): Promise<LtmFinancials | null> 
   }
 }
 
+function median(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function mean(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  return xs.reduce((s, v) => s + v, 0) / xs.length;
+}
+
 function buildMultiplesPrompt(args: {
   target: string;
   targetTicker?: string;
@@ -487,40 +515,82 @@ function renderTradingCompsHtml(args: RenderArgs): string {
   const multiplesByTicker = new Map(
     args.multiples.peer_multiples.map(m => [m.ticker.toUpperCase(), m]),
   );
-  const peerRows = args.survivors.map(p => {
+  // Per-peer Adj-EBITDA-margin gate. Margins below the meaningful threshold
+  // produce EV/EBITDA values in the hundreds (tiny denominator), which
+  // distort any aggregate. Render "n.m." in those cells and exclude them
+  // from the recomputed median/mean rows below.
+  type PeerCell = { ticker: string; evRevLtm: number | null; evRevNtm: number | null; evEbitdaLtm: number | null; evEbitdaNtm: number | null };
+  const peerCells: PeerCell[] = args.survivors.map(p => {
     const m = multiplesByTicker.get(p.ticker.toUpperCase());
     const adjMargin = p.ltmAdjEbitdaM != null && p.ltmRevenueM > 0
       ? (p.ltmAdjEbitdaM / p.ltmRevenueM) * 100
       : null;
+    const ebitdaMeaningful = adjMargin != null && adjMargin >= EBITDA_MARGIN_MEANINGFUL_THRESHOLD;
+    return {
+      ticker: p.ticker,
+      evRevLtm: m?.ev_revenue_x ?? null,
+      evRevNtm: m?.ev_revenue_ntm_x ?? null,
+      evEbitdaLtm: ebitdaMeaningful ? (m?.ev_ebitda_x ?? null) : null,
+      evEbitdaNtm: ebitdaMeaningful ? (m?.ev_ebitda_ntm_x ?? null) : null,
+    };
+  });
+
+  const peerRows = args.survivors.map((p, i) => {
+    const m = multiplesByTicker.get(p.ticker.toUpperCase());
+    const cell = peerCells[i];
+    const adjMargin = p.ltmAdjEbitdaM != null && p.ltmRevenueM > 0
+      ? (p.ltmAdjEbitdaM / p.ltmRevenueM) * 100
+      : null;
+    const ebitdaMeaningful = adjMargin != null && adjMargin >= EBITDA_MARGIN_MEANINGFUL_THRESHOLD;
     return [
       p.name,
       p.ticker,
       fmtMillions(p.ltmRevenueM),
       p.ltmRevenueGrowthPct != null ? fmtPctRaw(p.ltmRevenueGrowthPct) : '—',
       adjMargin != null ? fmtPctRaw(adjMargin) : '—',
-      m ? fmtMultiple(m.ev_revenue_x) : '—',
-      m && m.ev_revenue_ntm_x != null ? fmtMultiple(m.ev_revenue_ntm_x) : '—',
-      m && m.ev_ebitda_x != null ? fmtMultiple(m.ev_ebitda_x) : '—',
-      m && m.ev_ebitda_ntm_x != null ? fmtMultiple(m.ev_ebitda_ntm_x) : '—',
+      cell.evRevLtm != null ? fmtMultiple(cell.evRevLtm) : '—',
+      cell.evRevNtm != null ? fmtMultiple(cell.evRevNtm) : '—',
+      ebitdaMeaningful
+        ? (m?.ev_ebitda_x != null ? fmtMultiple(m.ev_ebitda_x) : '—')
+        : 'n.m.',
+      ebitdaMeaningful
+        ? (m?.ev_ebitda_ntm_x != null ? fmtMultiple(m.ev_ebitda_ntm_x) : '—')
+        : 'n.m.',
     ];
   });
+
+  // Recompute median/mean deterministically on the server using only
+  // meaningful peer values — Sonnet's reported aggregates can include
+  // sub-threshold names and skew the result. Authoritative version
+  // overrides whatever the LLM returned.
+  const evRevLtmVals = peerCells.map(c => c.evRevLtm).filter((v): v is number => v != null && Number.isFinite(v));
+  const evRevNtmVals = peerCells.map(c => c.evRevNtm).filter((v): v is number => v != null && Number.isFinite(v));
+  const evEbitdaLtmVals = peerCells.map(c => c.evEbitdaLtm).filter((v): v is number => v != null && Number.isFinite(v));
+  const evEbitdaNtmVals = peerCells.map(c => c.evEbitdaNtm).filter((v): v is number => v != null && Number.isFinite(v));
 
   const medianRow = [
     { value: 'Median', strong: true },
     '', '', '', '',
-    fmtMultiple(args.multiples.median.ev_revenue_x),
-    args.multiples.median.ev_revenue_ntm_x != null ? fmtMultiple(args.multiples.median.ev_revenue_ntm_x) : '—',
-    args.multiples.median.ev_ebitda_x != null ? fmtMultiple(args.multiples.median.ev_ebitda_x) : '—',
-    args.multiples.median.ev_ebitda_ntm_x != null ? fmtMultiple(args.multiples.median.ev_ebitda_ntm_x) : '—',
+    median(evRevLtmVals) != null ? fmtMultiple(median(evRevLtmVals)!) : '—',
+    median(evRevNtmVals) != null ? fmtMultiple(median(evRevNtmVals)!) : '—',
+    median(evEbitdaLtmVals) != null ? fmtMultiple(median(evEbitdaLtmVals)!) : '—',
+    median(evEbitdaNtmVals) != null ? fmtMultiple(median(evEbitdaNtmVals)!) : '—',
   ];
   const meanRow = [
     { value: 'Mean', strong: true },
     '', '', '', '',
-    fmtMultiple(args.multiples.mean.ev_revenue_x),
-    args.multiples.mean.ev_revenue_ntm_x != null ? fmtMultiple(args.multiples.mean.ev_revenue_ntm_x) : '—',
-    args.multiples.mean.ev_ebitda_x != null ? fmtMultiple(args.multiples.mean.ev_ebitda_x) : '—',
-    args.multiples.mean.ev_ebitda_ntm_x != null ? fmtMultiple(args.multiples.mean.ev_ebitda_ntm_x) : '—',
+    mean(evRevLtmVals) != null ? fmtMultiple(mean(evRevLtmVals)!) : '—',
+    mean(evRevNtmVals) != null ? fmtMultiple(mean(evRevNtmVals)!) : '—',
+    mean(evEbitdaLtmVals) != null ? fmtMultiple(mean(evEbitdaLtmVals)!) : '—',
+    mean(evEbitdaNtmVals) != null ? fmtMultiple(mean(evEbitdaNtmVals)!) : '—',
   ];
+  const ebitdaExcluded = peerCells.filter((_, i) => {
+    const p = args.survivors[i];
+    const adjMargin = p.ltmAdjEbitdaM != null && p.ltmRevenueM > 0
+      ? (p.ltmAdjEbitdaM / p.ltmRevenueM) * 100
+      : null;
+    return adjMargin == null || adjMargin < EBITDA_MARGIN_MEANINGFUL_THRESHOLD;
+  }).map(c => c.ticker);
 
   const compsTable = table({
     compact: true,
@@ -545,10 +615,14 @@ function renderTradingCompsHtml(args: RenderArgs): string {
         .join('; ')}.`
     : 'All proposed candidates passed the SEC-filing recency filter.';
 
+  const nmNote = ebitdaExcluded.length > 0
+    ? ` <strong>EV/EBITDA "n.m." (not meaningful):</strong> ${ebitdaExcluded.map(escape).join(', ')} — Adj EBITDA margin below ${EBITDA_MARGIN_MEANINGFUL_THRESHOLD}%, so the multiple is dominated by denominator noise. Excluded from the median/mean.`
+    : '';
+
   return [
     headline,
     positioning,
-    note(`<strong>Data sources:</strong> LTM revenue, operating income, gross profit, D&A, and SBC are sourced directly from SEC XBRL company facts (computed as previous_FY + current_YTD − prior_year_YTD when a 10-Q is more recent than the last 10-K). <strong>Adjusted EBITDA = Operating Income + D&A + SBC</strong> (SaaS-standard add-backs). Market cap, enterprise value, and NTM (next-twelve-month) revenue / EBITDA are Sonnet estimates — no live equity-price feed or consensus-estimates feed is currently piped in. ${droppedNote}`),
+    note(`<strong>Data sources:</strong> LTM revenue, operating income, gross profit, D&A, and SBC are sourced directly from SEC XBRL company facts (computed as previous_FY + current_YTD − prior_year_YTD when a 10-Q is more recent than the last 10-K). <strong>Adjusted EBITDA = Operating Income + D&A + SBC</strong> (SaaS-standard add-backs). Market cap, enterprise value, and NTM (next-twelve-month) revenue / EBITDA are Sonnet estimates — no live equity-price feed or consensus-estimates feed is currently piped in. ${droppedNote}${nmNote}`),
     section('Comps Table'),
     compsTable,
     section('Peer Inclusion + Recency'),

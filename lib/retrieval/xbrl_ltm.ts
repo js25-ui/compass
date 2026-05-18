@@ -40,7 +40,10 @@ export interface LtmFinancials {
 const REVENUE_CONCEPTS = [
   'Revenues',
   'RevenueFromContractWithCustomerExcludingAssessedTax',
+  'RevenueFromContractWithCustomerIncludingAssessedTax',
   'SalesRevenueNet',
+  'SalesRevenueGoodsNet',
+  'SalesRevenueServicesNet',
 ] as const;
 const OPERATING_INCOME_CONCEPTS = ['OperatingIncomeLoss'] as const;
 const GROSS_PROFIT_CONCEPTS = ['GrossProfit'] as const;
