@@ -38,9 +38,11 @@ import { ingestEntity } from '@/lib/ingest/pipeline';
 
 const MAX_TOP_N = 5;
 const INGEST_CONCURRENCY = 2;
-// Per-entity ingest budget. Single-entity ingest is typically <20s.
-// 30s gives a margin without burning all of maxDuration on one peer.
-const PER_ENTITY_INGEST_BUDGET_MS = 30_000;
+// Per-entity ingest budget. Cold ingest of a large filer (Welltower's
+// 10-Q is ~2MB inline XBRL) often takes 25-40s after Voyage rate-limit
+// backoffs. 60s gives the slow ones room without exhausting total
+// maxDuration (180s) across 5 entities at concurrency 2.
+const PER_ENTITY_INGEST_BUDGET_MS = 60_000;
 
 export interface SectorScreenScope {
   sector?: string;
@@ -197,14 +199,14 @@ export async function* runSectorScreenPipeline(opts: {
     }
   });
 
-  // Periodic progress emitter — yields "Ingesting N of M…" every 2s
-  // until all workers complete. Races against Promise.all so we don't
-  // hang after ingestion finishes.
+  // Periodic progress emitter — yields "Ingesting N of M…" only when
+  // the status STRING actually changes (otherwise the 2s tick spams the
+  // same line 15× during a slow ingest, flooding the audit trail).
   const allDone = Promise.all(workers).then(() => 'done');
   let running = true;
   Promise.all(workers).finally(() => { running = false; });
+  let lastStatusMsg: string | null = null;
   while (running) {
-    // Stable race: 2-second tick OR the workers finishing.
     const winner = await Promise.race([
       allDone,
       new Promise<string>(resolve => setTimeout(() => resolve('tick'), 2000)),
@@ -216,10 +218,11 @@ export async function* runSectorScreenPipeline(opts: {
         .filter(r => !ingestResults.has(r.ticker))
         .slice(0, INGEST_CONCURRENCY)
         .map(r => r.name);
-      yield {
-        type: 'progress',
-        step: `Ingesting ${ingestCompleted}/${ranked.length} complete · in flight: ${inProgress.join(', ')}`,
-      };
+      const msg = `Ingesting ${ingestCompleted}/${ranked.length} complete · in flight: ${inProgress.join(', ')}`;
+      if (msg !== lastStatusMsg) {
+        lastStatusMsg = msg;
+        yield { type: 'progress', step: msg };
+      }
     }
   }
   ingestCompleted = ingestResults.size;
