@@ -518,8 +518,25 @@ function relayDeliverableEvent(event: unknown, label: string, emit: RelayEmit): 
   const ev = event as { type: string; step?: string; text?: string; sources?: Array<{ n: number; title: string; url: string | null; meta: string }>; error?: string; inputs?: Record<string, unknown> | unknown[] };
   if (ev.type === 'progress') emit({ type: 'tool_result', name: label, summary: ev.step ?? '' });
   else if (ev.type === 'inputs_resolved') {
-    const i = ev.inputs as { entryEV?: number; leverageMultiple?: number; holdPeriod?: number; exitMultiple?: number } | undefined;
-    if (i) emit({ type: 'tool_result', name: label, summary: `Inputs: entry $${i.entryEV}M · ${i.leverageMultiple}x leverage · ${i.holdPeriod}y hold · ${i.exitMultiple}x exit` });
+    // Shape-detect: LBO emits {entryEV, leverageMultiple, holdPeriod,
+    // exitMultiple}; DCF emits {baseRevenue, projectionYears, waccPct,
+    // terminalGrowthPct, terminalMethod, ...}. Render the correct
+    // summary per shape — and never emit one with undefined/null tokens
+    // (the prior single-shape template surfaced 'undefined' values in
+    // the audit trail for every DCF run).
+    const i = ev.inputs as Record<string, unknown> | undefined;
+    if (i) {
+      let summary: string | null = null;
+      if (typeof i.entryEV === 'number') {
+        summary = `Inputs: entry $${i.entryEV}M · ${i.leverageMultiple}x leverage · ${i.holdPeriod}y hold · ${i.exitMultiple}x exit`;
+      } else if (typeof i.waccPct === 'number') {
+        const tmethod = i.terminalMethod === 'exit_multiple'
+          ? `${i.exitMultiple ?? 10}x exit`
+          : 'Gordon Growth';
+        summary = `Inputs: ${i.projectionYears}y horizon · ${(i.waccPct as number).toFixed(2)}% WACC · ${(i.terminalGrowthPct as number).toFixed(2)}% terminal g · ${tmethod}`;
+      }
+      if (summary) emit({ type: 'tool_result', name: label, summary });
+    }
   }
   else if (ev.type === 'inputs_traced') {
     const inputs = (ev.inputs ?? []) as InputTrace[];
