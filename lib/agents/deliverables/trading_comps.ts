@@ -34,6 +34,7 @@ import {
 } from './shared';
 import { lightPreflight } from '@/lib/data/preflight';
 import { findByTicker } from '@/lib/lookup/sec_tickers';
+import { findCikByTickerViaEdgarSearch } from '@/lib/lookup/edgar_search';
 import { getLtmFinancials, type LtmFinancials } from '@/lib/retrieval/xbrl_ltm';
 
 export interface TradingCompsScope {
@@ -241,40 +242,56 @@ Original ask: ${opts.query}`;
 
   for (const p of proposedPeers) {
     if (survivors.length >= numComps) break;
-    const entry = await findByTicker(p.ticker.toUpperCase());
-    if (!entry) {
-      // Report only what we can verify. We KNOW the ticker isn't in the
-      // SEC ticker registry. We do NOT know whether the company is
-      // delisted, non-US, or merely uses a ticker variant — don't
-      // hallucinate a cause.
-      droppedPeers.push({ ticker: p.ticker, name: p.name, reason: 'ticker not found in SEC ticker registry' });
+    // Primary lookup: SEC's company_tickers.json. This is fast but
+    // INCOMPLETE — it omits issuers who've filed Form 15 (Confluent
+    // CFLT did so on 2026-03-27, dropping it from the registry even
+    // though its 10-Ks/10-Qs and XBRL are all current).
+    let cik: string | null = null;
+    let resolvedName = p.name;
+    let resolvedTicker = p.ticker.toUpperCase();
+    const local = await findByTicker(resolvedTicker);
+    if (local) {
+      cik = local.cik;
+      resolvedName = local.name;
+      resolvedTicker = local.ticker;
+    } else {
+      // Fallback: SEC EDGAR full-text search. ~500ms extra but recovers
+      // valid filers missing from the static ticker file.
+      const remote = await findCikByTickerViaEdgarSearch(resolvedTicker);
+      if (remote) {
+        cik = remote.cik;
+        resolvedName = remote.name;
+      }
+    }
+    if (!cik) {
+      droppedPeers.push({ ticker: p.ticker, name: p.name, reason: 'ticker not resolved via SEC ticker registry or EDGAR full-text search' });
       continue;
     }
-    const ltm = await getLtmFinancialsSafe(entry.cik);
+    const ltm = await getLtmFinancialsSafe(cik);
     if (!ltm) {
-      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'XBRL companyfacts fetch failed or returned null' });
+      droppedPeers.push({ ticker: p.ticker, name: resolvedName, reason: 'XBRL companyfacts fetch failed or returned null' });
       continue;
     }
     if (ltm.ltmRevenue == null) {
-      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'XBRL revenue series unparseable for known concepts' });
+      droppedPeers.push({ ticker: p.ticker, name: resolvedName, reason: 'XBRL revenue series unparseable for known concepts' });
       continue;
     }
     if (!ltm.latestFilingDate) {
-      droppedPeers.push({ ticker: p.ticker, name: entry.name, reason: 'XBRL data present but no filing-date field' });
+      droppedPeers.push({ ticker: p.ticker, name: resolvedName, reason: 'XBRL data present but no filing-date field' });
       continue;
     }
     if (ltm.latestFilingDate < recencyCutoff) {
       droppedPeers.push({
         ticker: p.ticker,
-        name: entry.name,
+        name: resolvedName,
         reason: `most recent filing ${ltm.latestFilingDate} is older than ${FILING_RECENCY_DAYS} days`,
       });
       continue;
     }
     survivors.push({
-      ticker: entry.ticker,
-      name: entry.name,
-      cik: entry.cik,
+      ticker: resolvedTicker,
+      name: resolvedName,
+      cik,
       rationale: p.rationale,
       ltmRevenueM: ltm.ltmRevenue,
       ltmOperatingIncomeM: ltm.ltmOperatingIncome,
