@@ -541,7 +541,22 @@ function renderTradingCompsHtml(args: RenderArgs): string {
     const adjMargin = p.ltmAdjEbitdaM != null && p.ltmRevenueM > 0
       ? (p.ltmAdjEbitdaM / p.ltmRevenueM) * 100
       : null;
-    const ebitdaMeaningful = adjMargin != null && adjMargin >= EBITDA_MARGIN_MEANINGFUL_THRESHOLD;
+    // Three states for the EBITDA cells:
+    //   - margin >= 5% → render the multiple (meaningful)
+    //   - margin known but < 5% → 'n.m.' (denominator too small)
+    //   - margin null (D&A or SBC missing from XBRL) → '—' (data gap)
+    let evEbitdaLtmCell: string;
+    let evEbitdaNtmCell: string;
+    if (adjMargin == null) {
+      evEbitdaLtmCell = '—';
+      evEbitdaNtmCell = '—';
+    } else if (adjMargin < EBITDA_MARGIN_MEANINGFUL_THRESHOLD) {
+      evEbitdaLtmCell = 'n.m.';
+      evEbitdaNtmCell = 'n.m.';
+    } else {
+      evEbitdaLtmCell = m?.ev_ebitda_x != null ? fmtMultiple(m.ev_ebitda_x) : '—';
+      evEbitdaNtmCell = m?.ev_ebitda_ntm_x != null ? fmtMultiple(m.ev_ebitda_ntm_x) : '—';
+    }
     return [
       p.name,
       p.ticker,
@@ -550,12 +565,8 @@ function renderTradingCompsHtml(args: RenderArgs): string {
       adjMargin != null ? fmtPctRaw(adjMargin) : '—',
       cell.evRevLtm != null ? fmtMultiple(cell.evRevLtm) : '—',
       cell.evRevNtm != null ? fmtMultiple(cell.evRevNtm) : '—',
-      ebitdaMeaningful
-        ? (m?.ev_ebitda_x != null ? fmtMultiple(m.ev_ebitda_x) : '—')
-        : 'n.m.',
-      ebitdaMeaningful
-        ? (m?.ev_ebitda_ntm_x != null ? fmtMultiple(m.ev_ebitda_ntm_x) : '—')
-        : 'n.m.',
+      evEbitdaLtmCell,
+      evEbitdaNtmCell,
     ];
   });
 
@@ -584,13 +595,17 @@ function renderTradingCompsHtml(args: RenderArgs): string {
     mean(evEbitdaLtmVals) != null ? fmtMultiple(mean(evEbitdaLtmVals)!) : '—',
     mean(evEbitdaNtmVals) != null ? fmtMultiple(mean(evEbitdaNtmVals)!) : '—',
   ];
-  const ebitdaExcluded = peerCells.filter((_, i) => {
-    const p = args.survivors[i];
+  // Track two separate exclusion buckets so the data note distinguishes
+  // "denominator too small" from "no margin data at all".
+  const ebitdaBelowThreshold: string[] = [];
+  const ebitdaUnknown: string[] = [];
+  args.survivors.forEach((p, i) => {
     const adjMargin = p.ltmAdjEbitdaM != null && p.ltmRevenueM > 0
       ? (p.ltmAdjEbitdaM / p.ltmRevenueM) * 100
       : null;
-    return adjMargin == null || adjMargin < EBITDA_MARGIN_MEANINGFUL_THRESHOLD;
-  }).map(c => c.ticker);
+    if (adjMargin == null) ebitdaUnknown.push(peerCells[i].ticker);
+    else if (adjMargin < EBITDA_MARGIN_MEANINGFUL_THRESHOLD) ebitdaBelowThreshold.push(peerCells[i].ticker);
+  });
 
   const compsTable = table({
     compact: true,
@@ -615,9 +630,14 @@ function renderTradingCompsHtml(args: RenderArgs): string {
         .join('; ')}.`
     : 'All proposed candidates passed the SEC-filing recency filter.';
 
-  const nmNote = ebitdaExcluded.length > 0
-    ? ` <strong>EV/EBITDA "n.m." (not meaningful):</strong> ${ebitdaExcluded.map(escape).join(', ')} — Adj EBITDA margin below ${EBITDA_MARGIN_MEANINGFUL_THRESHOLD}%, so the multiple is dominated by denominator noise. Excluded from the median/mean.`
-    : '';
+  const nmParts: string[] = [];
+  if (ebitdaBelowThreshold.length > 0) {
+    nmParts.push(`<strong>EV/EBITDA "n.m." (not meaningful):</strong> ${ebitdaBelowThreshold.map(escape).join(', ')} — Adj EBITDA margin below ${EBITDA_MARGIN_MEANINGFUL_THRESHOLD}%, denominator too small. Excluded from median/mean.`);
+  }
+  if (ebitdaUnknown.length > 0) {
+    nmParts.push(`<strong>EBITDA margin unavailable:</strong> ${ebitdaUnknown.map(escape).join(', ')} — D&A or SBC missing from the issuer's XBRL filing. Excluded from EBITDA median/mean.`);
+  }
+  const nmNote = nmParts.length > 0 ? ' ' + nmParts.join(' ') : '';
 
   return [
     headline,
