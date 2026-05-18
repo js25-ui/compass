@@ -27,6 +27,7 @@ export type TaskType =
   | 'ic_memo'
   | 'pitch_book'
   | 'excel_model'
+  | 'sector_screen'
   | 'chat_answer';
 
 export type ParamKind = 'numeric' | 'select' | 'multi_select' | 'boolean' | 'text';

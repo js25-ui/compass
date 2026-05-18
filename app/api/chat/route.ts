@@ -16,6 +16,7 @@ import { runPitchBookPipeline, type PitchBookScope } from '@/lib/agents/delivera
 import { runDCFPipeline, type DCFScope } from '@/lib/agents/deliverables/dcf';
 import { runFootballFieldPipeline, type FootballFieldScope } from '@/lib/agents/deliverables/football_field';
 import { runMonteCarloPipeline, type MonteCarloScope } from '@/lib/agents/deliverables/monte_carlo';
+import { runSectorScreenPipeline, type SectorScreenScope } from '@/lib/agents/deliverables/sector_screen';
 import type { DeliverableEvent, InputTrace } from '@/lib/agents/deliverables/shared';
 import { computeConfidence } from '@/lib/agents/deliverables/confidence';
 import { auditCitations, fingerprintRun } from '@/lib/agents/deliverables/citation_audit';
@@ -25,8 +26,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 // Cold-corpus chat queries (Carvana, Wingstop, anything not yet indexed)
 // budget: pre-ingest ~15-25s, search turn ~6-10s, final-answer turn ~10-20s.
-// The 60s default was a tight fit; 90s gives margin without being wasteful.
-export const maxDuration = 90;
+// Sector-screen ingests up to 5 entities with concurrency 2 — ~30-50s on
+// top of the screening + synthesis steps. 180s leaves headroom.
+export const maxDuration = 180;
 
 interface ScopeAnswers {
   [questionId: string]: string | number | boolean | string[];
@@ -421,6 +423,11 @@ function pickDeliverableGenerator(
       return {
         label: 'excel_model',
         gen: excelExportAction(body),
+      };
+    case 'sector_screen':
+      return {
+        label: 'sector_screen',
+        gen: runSectorScreenPipeline({ query, scope: scope as SectorScreenScope }),
       };
     default:
       return null;

@@ -57,7 +57,7 @@ const CLASSIFY_PROMPT = `Classify the user's request into a TaskType + target.
 
 Output STRICT JSON:
 {
-  "task_type": "<one of: lbo | dcf | trading_comps | precedents | ipo_valuation | bond_pricing | monte_carlo | football_field | ic_memo | pitch_book | excel_model | chat_answer>",
+  "task_type": "<one of: lbo | dcf | trading_comps | precedents | ipo_valuation | bond_pricing | monte_carlo | football_field | ic_memo | pitch_book | excel_model | sector_screen | chat_answer>",
   "asset_class": "equity | debt | muni | private_equity | macro | unknown",
   "detected_target": { "name": "<canonical>", "ticker": "<TKR if known>" } | null,
   "confidence": 0-1
@@ -75,7 +75,21 @@ Mapping cheat sheet:
 - "IC memo", "investment memo", "approval memo" → ic_memo
 - "pitch book", "pitch deck", "deck" → pitch_book
 - "Excel model", "spreadsheet", "export to excel", "download as xlsx" → excel_model
+- CATEGORY / SECTOR queries with NO specific company name → sector_screen.
+    Triggers: "largest X", "top X", "biggest X", "major X", "leading X",
+    "list of X" where X is a SECTOR (REITs, banks, semiconductors,
+    airlines, restaurants, ecommerce, oil majors, pharma, etc.). Also
+    triggers when the user asks for "composition and key financials" of
+    a sector, or "give me the biggest names in X".
+    For sector_screen, detected_target SHOULD BE NULL (it's a category,
+    not a single entity).
 - Open-ended questions / explanations → chat_answer
+
+DISAMBIGUATION:
+- "DCF on Apple" → dcf with target Apple (specific entity, NOT sector_screen)
+- "largest REITs" → sector_screen, target null (category, no specific name)
+- "Snowflake trading comps" → trading_comps (specific anchor entity)
+- "biggest SaaS companies" → sector_screen (category, no specific company)
 
 Be specific in detected_target. For "compare Apple to Microsoft", target_name = "Apple" (primary).
 
@@ -131,6 +145,27 @@ export async function clarifyScope(
       questions: [],
       acknowledged_scope: {},
       acknowledged_pills: [],
+    };
+  }
+
+  // Sector-screen is a category query — no per-entity target, no need for
+  // a scope form. The pipeline matches the sector phrase against the
+  // configured sector list and defaults top_n=5. Pass the raw query
+  // through as scope.sector and proceed directly.
+  if (classification.task_type === 'sector_screen') {
+    return {
+      task_type: 'sector_screen',
+      asset_class: classification.asset_class,
+      detected_target: null,
+      ready_to_proceed: true,
+      preface: '',
+      questions: [],
+      acknowledged_scope: { sector: query },
+      acknowledged_pills: [{
+        paramId: 'sector',
+        label: `Sector: "${query.slice(0, 80)}"`,
+        source: 'current_prompt',
+      }],
     };
   }
 

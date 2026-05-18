@@ -1,0 +1,101 @@
+{
+  "_doc": "Sector → SIC + curated constituent tickers. Order matters only as a fallback when LTM revenue isn't available; the pipeline ranks by XBRL LTM revenue first. SIC codes from https://www.sec.gov/info/edgar/siccodes.htm. Add sectors here — pipeline picks them up automatically.",
+  "sectors": {
+    "reits": {
+      "labels": ["reits", "reit", "real estate investment trusts", "real estate investment trust", "us reits", "public reits"],
+      "sic_codes": ["6798"],
+      "description": "Real Estate Investment Trusts",
+      "constituents": ["AMT", "PLD", "EQIX", "WELL", "PSA", "O", "SPG", "CCI", "DLR", "EXR", "VICI", "AVB", "EQR", "VTR", "ARE", "INVH", "MAA", "ESS", "SUI", "CPT"]
+    },
+    "data_centers": {
+      "labels": ["data center", "data centers", "data-center companies", "data center reits", "hyperscale data centers", "data center companies"],
+      "sic_codes": ["6798", "7389"],
+      "description": "Data-center operators and data-center REITs",
+      "constituents": ["EQIX", "DLR", "AMT", "IRM", "GLPI", "CCI"]
+    },
+    "national_commercial_banks": {
+      "labels": ["national commercial banks", "money center banks", "big banks", "us big banks", "largest banks", "money-center banks"],
+      "sic_codes": ["6021"],
+      "description": "National Commercial Banks (money-center / large regional)",
+      "constituents": ["JPM", "BAC", "WFC", "C", "USB", "PNC", "TFC", "COF", "FITB", "HBAN"]
+    },
+    "regional_banks": {
+      "labels": ["regional banks", "us regional banks", "state commercial banks"],
+      "sic_codes": ["6022"],
+      "description": "State commercial / regional banks",
+      "constituents": ["USB", "PNC", "TFC", "COF", "FITB", "HBAN", "RF", "KEY", "CFG", "MTB", "ZION", "CMA"]
+    },
+    "investment_banks": {
+      "labels": ["investment banks", "bulge bracket", "global investment banks"],
+      "sic_codes": ["6199", "6211"],
+      "description": "Investment Banks / Securities Brokers & Dealers",
+      "constituents": ["GS", "MS", "JPM", "BAC", "C", "SCHW", "RJF", "LAZ", "EVR", "PJT"]
+    },
+    "semiconductors": {
+      "labels": ["semiconductors", "semiconductor companies", "chipmakers", "chip companies", "semis", "us semiconductor companies"],
+      "sic_codes": ["3674"],
+      "description": "Semiconductors & Related Devices",
+      "constituents": ["NVDA", "AVGO", "AMD", "INTC", "QCOM", "TXN", "AMAT", "MU", "ADI", "LRCX", "KLAC", "MRVL", "MCHP", "ON", "NXPI"]
+    },
+    "airlines": {
+      "labels": ["airlines", "us airlines", "major airlines", "airline companies", "air transportation"],
+      "sic_codes": ["4512"],
+      "description": "Air Transportation, Scheduled",
+      "constituents": ["DAL", "UAL", "AAL", "LUV", "ALK", "JBLU", "SAVE", "HA", "ALGT", "SKYW"]
+    },
+    "restaurants": {
+      "labels": ["restaurants", "restaurant companies", "us restaurants", "biggest restaurant companies", "largest restaurants", "restaurant chains"],
+      "sic_codes": ["5812"],
+      "description": "Eating Places (restaurants)",
+      "constituents": ["MCD", "SBUX", "CMG", "YUM", "DRI", "TXRH", "DPZ", "QSR", "WEN", "JACK", "BLMN", "CAKE", "EAT", "DENN", "CAVA", "WING"]
+    },
+    "fast_casual_restaurants": {
+      "labels": ["fast casual", "fast-casual", "fast casual restaurants", "fast-casual restaurants"],
+      "sic_codes": ["5812"],
+      "description": "Fast-casual restaurants",
+      "constituents": ["CMG", "CAVA", "WING", "SHAK", "FRGI", "NDLS", "PLAY"]
+    },
+    "ecommerce": {
+      "labels": ["ecommerce", "e-commerce", "online retail", "internet retailers", "e-commerce companies"],
+      "sic_codes": ["5961"],
+      "description": "Catalog & Mail-Order / E-commerce retailers",
+      "constituents": ["AMZN", "EBAY", "ETSY", "W", "CHWY", "REAL", "QRTEA", "GRPN", "CPNG"]
+    },
+    "saas_enterprise": {
+      "labels": ["enterprise saas", "enterprise software", "saas companies", "cloud saas"],
+      "sic_codes": ["7372"],
+      "description": "Prepackaged Software (enterprise SaaS)",
+      "constituents": ["MSFT", "ORCL", "ADBE", "CRM", "NOW", "INTU", "WDAY", "SNOW", "DDOG", "MDB", "NET", "PANW", "CRWD", "ZS", "OKTA", "TEAM", "HUBS", "PLTR"]
+    },
+    "oil_majors": {
+      "labels": ["oil majors", "integrated oil", "big oil", "oil and gas majors", "supermajors"],
+      "sic_codes": ["2911", "1311"],
+      "description": "Integrated Petroleum (oil majors)",
+      "constituents": ["XOM", "CVX", "COP", "EOG", "OXY", "PSX", "VLO", "MPC", "HES", "FANG", "DVN"]
+    },
+    "pharma": {
+      "labels": ["pharmaceuticals", "pharma", "drug companies", "big pharma", "pharmaceutical companies"],
+      "sic_codes": ["2834"],
+      "description": "Pharmaceutical Preparations",
+      "constituents": ["LLY", "JNJ", "PFE", "MRK", "ABBV", "BMY", "AMGN", "GILD", "VRTX", "REGN", "BIIB"]
+    },
+    "biotech": {
+      "labels": ["biotech", "biotechnology", "biotech companies"],
+      "sic_codes": ["2836"],
+      "description": "Pharmaceutical Preparations / Biological Products",
+      "constituents": ["VRTX", "REGN", "GILD", "BIIB", "MRNA", "ALNY", "INCY", "BMRN", "EXEL", "TECH"]
+    },
+    "autos": {
+      "labels": ["auto manufacturers", "automakers", "car companies", "us automakers"],
+      "sic_codes": ["3711"],
+      "description": "Motor Vehicles & Passenger Car Bodies",
+      "constituents": ["TSLA", "GM", "F", "RIVN", "LCID", "FOXF", "PCAR", "STLA"]
+    },
+    "telecom": {
+      "labels": ["telecom", "telecommunications", "telecom companies", "wireless carriers"],
+      "sic_codes": ["4813"],
+      "description": "Telephone Communications",
+      "constituents": ["T", "VZ", "TMUS", "LUMN", "USM", "CCOI", "CNSL"]
+    }
+  }
+}

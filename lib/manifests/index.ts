@@ -19,6 +19,7 @@ import { PITCH_BOOK_MANIFEST } from './pitch_book';
 import { FOOTBALL_FIELD_MANIFEST } from './football_field';
 import { MONTE_CARLO_MANIFEST } from './monte_carlo';
 import { EXCEL_MODEL_MANIFEST } from './excel_model';
+import { SECTOR_SCREEN_MANIFEST } from './sector_screen';
 import { GENERIC_MANIFEST } from './generic';
 
 const REGISTRY: Partial<Record<TaskType, TaskManifest>> = {
@@ -33,6 +34,7 @@ const REGISTRY: Partial<Record<TaskType, TaskManifest>> = {
   football_field: FOOTBALL_FIELD_MANIFEST,
   monte_carlo: MONTE_CARLO_MANIFEST,
   excel_model: EXCEL_MODEL_MANIFEST,
+  sector_screen: SECTOR_SCREEN_MANIFEST,
 };
 
 export function manifestFor(taskType: TaskType): TaskManifest {
