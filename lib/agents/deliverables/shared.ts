@@ -21,11 +21,88 @@ export async function sonnetJson<T>(opts: {
     .filter(b => b.type === 'text')
     .map(b => (b as { type: 'text'; text: string }).text)
     .join('');
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start < 0 || end < 0) throw new Error(`Sonnet returned non-JSON: ${cleaned.slice(0, 200)}`);
-  return JSON.parse(cleaned.slice(start, end + 1)) as T;
+  return parseSonnetJson<T>(text);
+}
+
+/**
+ * Tolerantly extract a JSON object or array from a model response.
+ *
+ * Sonnet is told to emit STRICT JSON, but it occasionally appends a
+ * trailing prose epilogue ("Note: I assumed …") or prefixes a leading
+ * preamble. The old `firstBrace…lastBrace` substring scheme failed when
+ * trailing prose contained any `}` character (the resulting slice ran
+ * past the real JSON, and JSON.parse threw 'Unexpected non-whitespace
+ * character after JSON at position N').
+ *
+ * Walk the string once, finding the first balanced `{...}` or `[...]`
+ * block — respecting strings + escape sequences so braces inside string
+ * literals don't throw the depth counter off. Returns the JSON-parsed
+ * result. Used by every deliverable pipeline via sonnetJson().
+ */
+export function parseSonnetJson<T>(raw: string): T {
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  const block = extractFirstBalancedJson(cleaned);
+  if (!block) {
+    throw new Error(`Sonnet returned no parseable JSON block: ${cleaned.slice(0, 200)}`);
+  }
+  try {
+    return JSON.parse(block) as T;
+  } catch (err) {
+    throw new Error(`Sonnet JSON.parse failed (${(err as Error).message}): ${block.slice(0, 200)}`);
+  }
+}
+
+function extractFirstBalancedJson(s: string): string | null {
+  // Find the first { or [ that opens a balanced block. We need to find
+  // the FIRST viable opener — some prefaces include curlies inside prose
+  // (rare, but possible), so attempt each candidate opener until one
+  // produces a balanced parse-able block.
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c !== '{' && c !== '[') continue;
+    const end = findBalancedEnd(s, i);
+    if (end > i) {
+      const candidate = s.slice(i, end + 1);
+      // Validate by parsing — if it fails (e.g. opener wasn't a real
+      // JSON start), keep scanning for the next opener.
+      try {
+        JSON.parse(candidate);
+        return candidate;
+      } catch {
+        // fall through to keep scanning
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Given an opening { or [ at index `start`, find the matching closer.
+ * Tracks nested depth and respects string literals (so braces inside
+ * strings don't affect the counter). Returns -1 if no balanced closer.
+ */
+function findBalancedEnd(s: string, start: number): number {
+  const opener = s[start];
+  const closer = opener === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (c === '\\') { escape = true; continue; }
+      if (c === '"') { inString = false; }
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === opener) depth++;
+    else if (c === closer) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 export function escape(s: string): string {
