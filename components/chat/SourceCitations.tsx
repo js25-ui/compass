@@ -11,6 +11,50 @@ export interface CitedSource {
   meta?: string;
 }
 
+type DateProvenance = 'sec_filed' | 'canonical' | 'feed_reported' | 'unknown' | null;
+
+/**
+ * Best-effort provenance label for the displayed filed_at on a citation.
+ *  - SEC EDGAR → always canonical (EDGAR filing date is authoritative)
+ *  - news.google.com URL → feed-reported (Google News' opaque redirects
+ *    can't be followed server-side, so the date is the aggregator's
+ *    index time)
+ *  - Known direct publisher → canonical (we fetched the article's
+ *    article:published_time meta tag)
+ *  - Anything else → unknown (don't make a claim either way)
+ *  - Compass-internal sources (deliverable pipelines) → null (no badge)
+ */
+function dateProvenanceFor(source: string | undefined, url: string | null | undefined): DateProvenance {
+  if (!source) return null;
+  if (source === 'sec_edgar') return 'sec_filed';
+  if (source === 'compass_internal') return null;
+  if (source !== 'news_rss' && source !== 'gdelt') return null;
+  if (!url) return 'unknown';
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === 'news.google.com') return 'feed_reported';
+    if (DIRECT_PUBLISHER_HOSTS.has(host)) return 'canonical';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+const DIRECT_PUBLISHER_HOSTS = new Set([
+  'finance.yahoo.com', 'www.yahoo.com', 'www.fool.com', 'www.reuters.com',
+  'www.bloomberg.com', 'www.cnbc.com', 'www.wsj.com', 'www.ft.com',
+  'seekingalpha.com', 'www.marketwatch.com', 'www.barrons.com',
+  'www.businesswire.com', 'www.prnewswire.com', '247wallst.com',
+  'www.dailypolitical.com',
+]);
+
+const PROVENANCE_LABEL: Record<Exclude<DateProvenance, null>, { text: string; title: string; tone: 'good' | 'soft' | 'warn' }> = {
+  sec_filed: { text: 'SEC filed', title: 'Date is the SEC EDGAR filing date — authoritative.', tone: 'good' },
+  canonical: { text: 'canonical', title: 'Date sourced from the article\'s own published-time metadata.', tone: 'good' },
+  feed_reported: { text: 'feed-reported', title: 'Date is what the news aggregator reported — may reflect when the syndicator re-published, not the original.', tone: 'warn' },
+  unknown: { text: 'date unverified', title: 'Could not verify the published time against the article\'s own metadata.', tone: 'soft' },
+};
+
 interface SourceCitationsProps {
   sources: CitedSource[];
 }
@@ -39,11 +83,21 @@ export function SourceCitations({ sources }: SourceCitationsProps) {
     <div className="chat-sources">
       <div className="chat-sources-label">Sources Cited</div>
       {sources.map(s => {
+        const provenance = dateProvenanceFor(s.source, s.url);
+        const badge = provenance ? PROVENANCE_LABEL[provenance] : null;
         const linkContent = (
           <>
             <div className="chat-source-title">{s.title}</div>
             <div className="chat-source-meta">
               {metaFor(s)}
+              {badge && s.filedAt ? (
+                <span
+                  className={`chat-source-provenance chat-source-provenance-${badge.tone}`}
+                  title={badge.title}
+                >
+                  {' · '}{badge.text}
+                </span>
+              ) : null}
               {typeof s.similarity === 'number' ? ` · sim ${s.similarity.toFixed(2)}` : ''}
             </div>
             {s.url && (

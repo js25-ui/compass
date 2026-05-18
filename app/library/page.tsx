@@ -10,8 +10,49 @@ interface LibraryItem {
   source: string;
   docType: string;
   filedAt: string | null;
+  feedReportedDate?: string | null;
+  canonicalDate?: string | null;
   isPrimary: boolean;
 }
+
+type DateProvenance = 'sec_filed' | 'canonical' | 'feed_reported' | 'unknown';
+
+const DIRECT_PUBLISHER_HOSTS = new Set([
+  'finance.yahoo.com', 'www.yahoo.com', 'www.fool.com', 'www.reuters.com',
+  'www.bloomberg.com', 'www.cnbc.com', 'www.wsj.com', 'www.ft.com',
+  'seekingalpha.com', 'www.marketwatch.com', 'www.barrons.com',
+  'www.businesswire.com', 'www.prnewswire.com', '247wallst.com',
+  'www.dailypolitical.com',
+]);
+
+/**
+ * Date provenance for a library row. Authoritative sources (SEC EDGAR,
+ * canonical fetch) get a "good" tag; aggregator-reported dates (Google
+ * News' opaque redirects) get a "warn" tag so the user sees the date
+ * may reflect syndication time, not the original publication.
+ */
+function dateProvenanceFor(item: LibraryItem): DateProvenance | null {
+  if (item.source === 'sec_edgar') return 'sec_filed';
+  if (item.source !== 'news_rss' && item.source !== 'gdelt') return null;
+  // Prefer the metadata signal when present.
+  if (item.canonicalDate) return 'canonical';
+  if (!item.url) return 'unknown';
+  try {
+    const host = new URL(item.url).hostname.toLowerCase();
+    if (host === 'news.google.com') return 'feed_reported';
+    if (DIRECT_PUBLISHER_HOSTS.has(host)) return 'canonical';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+const PROVENANCE_PILL: Record<DateProvenance, { label: string; title: string; tone: 'good' | 'warn' | 'soft' }> = {
+  sec_filed: { label: 'SEC', title: 'Date is the SEC EDGAR filing date — authoritative.', tone: 'good' },
+  canonical: { label: 'canonical', title: 'Date sourced from the article\'s own published-time meta tag.', tone: 'good' },
+  feed_reported: { label: 'feed', title: 'Aggregator-reported (Google News). May be syndication time, not original publication.', tone: 'warn' },
+  unknown: { label: '?', title: 'Could not verify against the article\'s own metadata.', tone: 'soft' },
+};
 
 interface SourceStat {
   source: string;
@@ -200,20 +241,34 @@ export default function LibraryPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(item => (
-                <tr key={item.documentId}>
-                  <td className="lib-td-num">{item.filedAt ? item.filedAt.slice(0, 10) : '—'}</td>
-                  <td className="lib-td-muted">{SOURCE_LABELS[item.source] ?? item.source}</td>
-                  <td className="lib-td-muted">{item.docType}</td>
-                  <td className="lib-td-muted">{item.targetId ?? '—'}</td>
-                  <td>
-                    {item.url
-                      ? <a className="library-link" href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
-                      : item.title}
-                  </td>
-                  <td>{item.isPrimary ? <span className="lib-primary-pill">primary</span> : null}</td>
-                </tr>
-              ))}
+              {filtered.map(item => {
+                const provenance = dateProvenanceFor(item);
+                const pill = provenance ? PROVENANCE_PILL[provenance] : null;
+                return (
+                  <tr key={item.documentId}>
+                    <td className="lib-td-num">
+                      {item.filedAt ? item.filedAt.slice(0, 10) : '—'}
+                      {pill ? (
+                        <span
+                          className={`lib-provenance-pill lib-provenance-${pill.tone}`}
+                          title={pill.title}
+                        >
+                          {pill.label}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="lib-td-muted">{SOURCE_LABELS[item.source] ?? item.source}</td>
+                    <td className="lib-td-muted">{item.docType}</td>
+                    <td className="lib-td-muted">{item.targetId ?? '—'}</td>
+                    <td>
+                      {item.url
+                        ? <a className="library-link" href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
+                        : item.title}
+                    </td>
+                    <td>{item.isPrimary ? <span className="lib-primary-pill">primary</span> : null}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

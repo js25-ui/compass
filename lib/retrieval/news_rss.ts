@@ -25,8 +25,15 @@ export async function fetchNewsForEntity(opts: {
   const items: RssItem[] = [];
   for (const r of results) if (r.status === 'fulfilled') items.push(...r.value);
 
-  return dedupeByLink(items)
-    .sort((a, b) => (parseDate(b.pubDate) ?? 0) - (parseDate(a.pubDate) ?? 0));
+  // First dedupe by exact link (cheap; catches identical re-postings).
+  // Then dedupe by normalized title — when the same story appears in both
+  // Yahoo Finance (direct URL, canonical date fetchable) and Google News
+  // (opaque redirect URL whose pubDate is the aggregator's index time),
+  // keep the direct-URL version. Avoids the syndication-date problem
+  // without needing to crack Google News' redirect encoding.
+  const byLink = dedupeByLink(items);
+  const byTitle = dedupeByNormalizedTitle(byLink);
+  return byTitle.sort((a, b) => (parseDate(b.pubDate) ?? 0) - (parseDate(a.pubDate) ?? 0));
 }
 
 async function fetchYahooFinance(ticker: string): Promise<RssItem[]> {
@@ -96,4 +103,96 @@ function dedupeByLink(items: RssItem[]): RssItem[] {
     out.push(i);
   }
   return out;
+}
+
+/**
+ * Strip the trailing publisher suffix Google News appends to titles
+ * ("- USA Today", "- MSN", "- Yahoo Finance"), lowercase, collapse
+ * whitespace, remove punctuation. Two articles about the same story
+ * from different feeds end up with the same normalized key even though
+ * one says "Texas Roadhouse increases menu prices amid inflation -
+ * USA Today" and the other "Texas Roadhouse increases menu prices
+ * amid inflation - MSN".
+ */
+function normalizeTitle(title: string): string {
+  let t = title.trim();
+  // Drop " - Publisher" trailing suffix that Google News appends.
+  const dashIdx = t.lastIndexOf(' - ');
+  if (dashIdx > 20 && dashIdx > t.length - 60) {
+    t = t.slice(0, dashIdx);
+  }
+  return t
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[‘’“”]/g, "'")         // curly quotes
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const DIRECT_URL_HOSTS = new Set([
+  'finance.yahoo.com',
+  'www.yahoo.com',
+  'www.fool.com',
+  'www.reuters.com',
+  'www.bloomberg.com',
+  'www.cnbc.com',
+  'www.wsj.com',
+  'www.ft.com',
+  'seekingalpha.com',
+  'www.marketwatch.com',
+  'www.barrons.com',
+  'www.businesswire.com',
+  'www.prnewswire.com',
+]);
+
+/** Higher score = better-quality URL to keep when titles collide. */
+function urlQualityScore(url: string): number {
+  try {
+    const u = new URL(url);
+    // Google News intermediates are opaque protobuf redirects — worst.
+    if (u.hostname === 'news.google.com') return 0;
+    // Known direct publishers — best.
+    if (DIRECT_URL_HOSTS.has(u.hostname)) return 3;
+    // Direct-looking URL (article path with words, not just a token) — good.
+    if (/\/(20\d{2}|article|news|story|m|p)\//.test(u.pathname) || u.pathname.length > 30) return 2;
+    return 1;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Group by normalized title and keep ONE representative per group.
+ * Preference (in order):
+ *   1. Higher urlQualityScore (direct publisher > Google News redirect)
+ *   2. Earlier pubDate (closer to original publication when both are direct)
+ */
+function dedupeByNormalizedTitle(items: RssItem[]): RssItem[] {
+  const byKey = new Map<string, RssItem>();
+  for (const item of items) {
+    const key = normalizeTitle(item.title);
+    if (!key) {
+      byKey.set(item.link, item);   // can't normalize — keep verbatim
+      continue;
+    }
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, item);
+      continue;
+    }
+    const existingScore = urlQualityScore(existing.link);
+    const candidateScore = urlQualityScore(item.link);
+    if (candidateScore > existingScore) {
+      byKey.set(key, item);
+      continue;
+    }
+    if (candidateScore === existingScore) {
+      // Tie on URL quality — prefer the earlier pubDate (closer to original).
+      const existingMs = parseDate(existing.pubDate) ?? Infinity;
+      const candidateMs = parseDate(item.pubDate) ?? Infinity;
+      if (candidateMs < existingMs) byKey.set(key, item);
+    }
+  }
+  return [...byKey.values()];
 }
